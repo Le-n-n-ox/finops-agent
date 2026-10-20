@@ -20,6 +20,7 @@ function deriveSources(d: AnalysisResponse): Source[] {
 }
 
 export default function InputStatus({ data }: { data: AnalysisResponse }) {
+  const issues = data.input_issues ?? []
   return (
     <Card>
       <CardHeader>
@@ -42,6 +43,16 @@ export default function InputStatus({ data }: { data: AnalysisResponse }) {
             </div>
           </div>
         ))}
+        {issues.length > 0 && (
+          <ul className="space-y-1 sm:col-span-3" aria-label="Validation issues">
+            {issues.map((i) => (
+              <li key={`${i.code}-${i.workload_id ?? ''}-${i.message}`} className="flex items-start gap-2 rounded-md border bg-background px-3 py-2 text-sm">
+                <TriangleAlert className={i.severity === 'error' ? 'mt-0.5 size-4 shrink-0 text-red-500' : 'mt-0.5 size-4 shrink-0 text-amber-500'} aria-hidden />
+                <span><span className="font-medium">{i.code}</span> · {i.message}{i.source ? <span className="text-muted-foreground"> ({i.source})</span> : null}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </CardContent>
     </Card>
   )
