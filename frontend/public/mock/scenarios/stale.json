@@ -1,0 +1,126 @@
+{
+  "analysis_id": "ANL-SAMPLE-0001-stale",
+  "generated_at": "2026-10-13T09:00:00+03:00",
+  "mode": "demo",
+  "summary": {
+    "workloads_evaluated": 1,
+    "approved": 0,
+    "deferred": 0,
+    "rejected": 0,
+    "needs_review": 1,
+    "no_change": 0,
+    "estimated_monthly_savings_usd": 0
+  },
+  "results": [
+    {
+      "workload_id": "email-worker",
+      "namespace": "jobs",
+      "decision": "needs_review",
+      "risk_level": "medium",
+      "reason": "Only 10 samples; evidence insufficient.",
+      "checks": [
+        {
+          "name": "metrics_completeness",
+          "code": "INSUFFICIENT_SAMPLES",
+          "status": "triggered",
+          "message": "10 < 24 samples",
+          "evidence": {}
+        }
+      ],
+      "proposal": {
+        "proposal_id": "PRP-0003",
+        "workload_id": "email-worker",
+        "namespace": "jobs",
+        "status": "insufficient_data",
+        "current": {
+          "cpu_request_millicores": 500,
+          "cpu_limit_millicores": 1500,
+          "memory_request_mib": 2048,
+          "memory_limit_mib": 3072
+        },
+        "proposed": null,
+        "metrics": {
+          "sample_count": 10,
+          "span_hours": 9,
+          "cpu_p95": null,
+          "cpu_p99": null,
+          "memory_p95": null,
+          "memory_p99": null
+        },
+        "reasons": [
+          "Need >= 24 samples and >= 24h span"
+        ],
+        "warnings": [],
+        "estimated_monthly_saving_usd": 0,
+        "created_at": "2026-10-13T09:00:00+03:00"
+      },
+      "monthly_savings_estimate_usd": 0,
+      "yaml_patch": null,
+      "usage_series": [
+        {
+          "t": "2026-10-08T21:00:00.000Z",
+          "cpu": 168,
+          "mem": 806
+        },
+        {
+          "t": "2026-10-08T22:00:00.000Z",
+          "cpu": 177,
+          "mem": 810
+        },
+        {
+          "t": "2026-10-08T23:00:00.000Z",
+          "cpu": 183,
+          "mem": 812
+        },
+        {
+          "t": "2026-10-09T00:00:00.000Z",
+          "cpu": 190,
+          "mem": 815
+        },
+        {
+          "t": "2026-10-09T01:00:00.000Z",
+          "cpu": 196,
+          "mem": 818
+        },
+        {
+          "t": "2026-10-09T02:00:00.000Z",
+          "cpu": 199,
+          "mem": 819
+        },
+        {
+          "t": "2026-10-09T03:00:00.000Z",
+          "cpu": 198,
+          "mem": 818
+        },
+        {
+          "t": "2026-10-09T04:00:00.000Z",
+          "cpu": 198,
+          "mem": 818
+        },
+        {
+          "t": "2026-10-09T05:00:00.000Z",
+          "cpu": 195,
+          "mem": 817
+        },
+        {
+          "t": "2026-10-09T06:00:00.000Z",
+          "cpu": 187,
+          "mem": 814
+        }
+      ],
+      "events": []
+    }
+  ],
+  "warnings": [
+    "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
+  ],
+  "input_issues": [
+    {
+      "severity": "warning",
+      "code": "INSUFFICIENT_SAMPLES",
+      "message": "email-worker has 10 usage samples (minimum 24).",
+      "source": "usage_history.csv",
+      "workload_id": "email-worker"
+    }
+  ]
+}

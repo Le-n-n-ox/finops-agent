@@ -1,11 +1,23 @@
 import { useEffect, useState } from 'react'
-import { Check, ClipboardCopy, Download, FileCode2, GitCommitVertical, Info, ListChecks, Lock, TriangleAlert } from 'lucide-react'
+import { toast } from 'sonner'
+import { Check, ClipboardCopy, Download, FileCode2, GitCommitVertical, Info, ListChecks, Lock, TriangleAlert, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { CHECK_STYLE, DecisionBadge, RiskText } from './DecisionBadge'
+import { CHECK_STYLE, DECISIONS, DecisionBadge, RiskText } from './DecisionBadge'
+import UsageChart from './UsageChart'
+import YamlDiff from './YamlDiff'
+import { downloadText } from '@/lib/report'
 import { cn } from '@/lib/utils'
-import type { WorkloadResult } from '@/types'
+import type { DecisionStatus, WorkloadResult } from '@/types'
+
+const CALLOUT: Record<DecisionStatus, string> = {
+  approved: 'border-l-emerald-500 bg-emerald-500/10',
+  deferred: 'border-l-amber-500 bg-amber-500/10',
+  rejected: 'border-l-red-500 bg-red-500/10',
+  needs_review: 'border-l-indigo-500 bg-indigo-500/10',
+  no_change: 'border-l-slate-400 bg-muted',
+}
 
 interface BarProps { label: string; unit: string; request: number | null; proposed?: number | null; p99: number | null }
 
@@ -35,32 +47,42 @@ function UsageBar({ label, unit, request, proposed, p99 }: BarProps) {
 const delta = (cur: number | null, next: number | null | undefined) =>
   cur && next != null ? `${Math.round(((next - cur) / cur) * 100)}%` : '—'
 
-export default function DetailPanel({ result }: { result: WorkloadResult }) {
+export default function DetailPanel({ result, className, onClose }: { result: WorkloadResult; className?: string; onClose?: () => void }) {
   const [copied, setCopied] = useState(false)
   const { proposal: p } = result
 
   const copy = async () => {
     if (!result.yaml_patch) return
-    await navigator.clipboard.writeText(result.yaml_patch)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
+    try {
+      await navigator.clipboard.writeText(result.yaml_patch)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+      toast.success('Patch copied to clipboard')
+    } catch {
+      toast.error('Could not access the clipboard')
+    }
   }
   const download = () => {
     if (!result.yaml_patch) return
-    const url = URL.createObjectURL(new Blob([result.yaml_patch], { type: 'text/yaml' }))
-    Object.assign(document.createElement('a'), { href: url, download: `${result.workload_id}.proposed-patch.yaml` }).click()
-    URL.revokeObjectURL(url)
+    const name = `${result.workload_id}.proposed-patch.yaml`
+    downloadText(name, result.yaml_patch, 'text/yaml')
+    toast.success(`Saved ${name}`)
   }
 
   return (
-    <Card className="animate-in fade-in slide-in-from-right-4 duration-300 motion-reduce:animate-none lg:sticky lg:top-6">
+    <Card className={cn('animate-in fade-in slide-in-from-right-4 duration-300 motion-reduce:animate-none lg:sticky lg:top-6', className)}>
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-lg">{result.workload_id}</CardTitle>
-          <DecisionBadge decision={result.decision} />
+          <div className="flex items-center gap-1">
+            <DecisionBadge decision={result.decision} />
+            {onClose && <Button variant="ghost" size="icon" className="-mr-2 size-8" onClick={onClose} aria-label="Close details"><X /></Button>}
+          </div>
         </div>
         <p className="text-xs text-muted-foreground">{result.namespace} · {p.proposal_id} · risk <RiskText risk={result.risk_level} /></p>
-        <p className="pt-1 text-sm">{result.reason}</p>
+        <p className={cn('mt-2 rounded-md border-l-4 p-3 text-sm', CALLOUT[result.decision])}>
+          <span className="font-medium">{DECISIONS[result.decision].label}: </span>{result.reason}
+        </p>
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="evidence" key={result.workload_id}>
@@ -71,6 +93,7 @@ export default function DetailPanel({ result }: { result: WorkloadResult }) {
           </TabsList>
 
           <TabsContent value="evidence" className="space-y-5">
+            <UsageChart result={result} />
             <div className="space-y-3">
               <UsageBar label="CPU" unit="m" request={p.current.cpu_request_millicores} proposed={p.proposed?.cpu_request_millicores} p99={p.metrics.cpu_p99} />
               <UsageBar label="Memory" unit="MiB" request={p.current.memory_request_mib} proposed={p.proposed?.memory_request_mib} p99={p.metrics.memory_p99} />
@@ -97,7 +120,7 @@ export default function DetailPanel({ result }: { result: WorkloadResult }) {
                 <GitCommitVertical className="absolute -left-[9px] size-[18px] bg-card text-muted-foreground" aria-hidden />
                 <p className="text-sm font-medium">Optimizer · {p.status.replaceAll('_', ' ')}</p>
                 {p.reasons.map((r) => <p key={r} className="text-sm text-muted-foreground">{r}</p>)}
-                {p.warnings.map((w) => <p key={w} className="flex gap-1 text-sm text-amber-600 dark:text-amber-400"><TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />{w}</p>)}
+                {p.warnings.map((w) => <p key={w} className="flex gap-1 text-sm text-amber-700 dark:text-amber-400"><TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />{w}</p>)}
               </li>
               {result.checks.map((c) => (
                 <li key={c.name + c.code} className="relative">
@@ -124,7 +147,7 @@ export default function DetailPanel({ result }: { result: WorkloadResult }) {
                   <Button variant="outline" size="sm" onClick={copy}>{copied ? <Check /> : <ClipboardCopy />}{copied ? 'Copied' : 'Copy'}</Button>
                   <Button variant="outline" size="sm" onClick={download}><Download />Download</Button>
                 </div>
-                <pre className="max-h-72 overflow-auto rounded-md border bg-muted p-3 text-xs">{result.yaml_patch}</pre>
+                <YamlDiff patch={result.yaml_patch} />
               </>
             ) : (
               <p className="text-sm text-muted-foreground">No patch — nothing is proposed for this workload.</p>

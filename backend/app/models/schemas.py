@@ -180,6 +180,22 @@ class CriticCheck(BaseModel):
     status: CheckStatus
     message: str
     evidence: dict[str, Any] = {}  # event id, usage window, incident id, computed floor ...
+    
+    
+    
+class UsagePoint(BaseModel):
+    """OPTIONAL chart data for the UI (hourly usage). Units as everywhere: millicores / MiB."""
+    t: datetime
+    cpu: float
+    mem: float
+
+
+class EventWindow(BaseModel):
+    """OPTIONAL: business event overlapping the decision, for the UI chart band."""
+    name: str
+    start_at: datetime
+    end_at: datetime
+    risk: str | None = None
 
 
 class WorkloadResult(BaseModel):
@@ -192,6 +208,8 @@ class WorkloadResult(BaseModel):
     proposal: OptimizationProposal
     monthly_savings_estimate_usd: float = 0.0
     yaml_patch: str | None = None  # review-only
+    usage_series: list[UsagePoint] = []   # optional, for the UI usage chart
+    events: list[EventWindow] = []        # optional, for the UI event band
 
 
 class AnalysisSummary(BaseModel):
@@ -211,3 +229,4 @@ class AnalysisResponse(BaseModel):
     summary: AnalysisSummary
     results: list[WorkloadResult]
     warnings: list[str] = []
+    input_issues: list[ValidationIssue] = []   # optional, surfaces load_inputs() issues in the UI

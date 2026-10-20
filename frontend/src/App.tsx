@@ -1,43 +1,82 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Info, Lock, RefreshCw, ServerCog, TriangleAlert } from 'lucide-react'
+import { toast } from 'sonner'
+import { FileDown, Info, Lock, Printer, RefreshCw, ServerCog, TriangleAlert } from 'lucide-react'
 import { runAnalysis, type LoadResult } from '@/api'
 import type { DecisionStatus } from '@/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import { buildReport, downloadText } from '@/lib/report'
+import { useMediaQuery } from '@/hooks/useMediaQuery'
+import AppToaster from '@/components/AppToaster'
 import ThemeToggle from '@/components/ThemeToggle'
+import ScenarioSwitcher from '@/components/ScenarioSwitcher'
 import Workflow from '@/components/Workflow'
 import InputStatus from '@/components/InputStatus'
 import SummaryCards from '@/components/SummaryCards'
+import DecisionDonut from '@/components/DecisionDonut'
+import SavingsChart from '@/components/SavingsChart'
 import ResultsTable from '@/components/ResultsTable'
 import DetailPanel from '@/components/DetailPanel'
+
+function LoadingSkeleton() {
+  return (
+    <div className="space-y-6" aria-busy="true" aria-label="Loading analysis">
+      <Skeleton className="h-20" />
+      <Skeleton className="h-32" />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-24" />)}</div>
+      <div className="grid gap-6 md:grid-cols-2"><Skeleton className="h-56" /><Skeleton className="h-56" /></div>
+      <Skeleton className="h-64" />
+    </div>
+  )
+}
 
 export default function App() {
   const [state, setState] = useState<LoadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [scenario, setScenario] = useState('all')
   const [filter, setFilter] = useState<DecisionStatus | 'all'>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const isDesktop = useMediaQuery('(min-width: 1024px)')
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      setState(await runAnalysis())
+      const res = await runAnalysis(scenario)
+      setState(res)
+      setFilter('all')
+      // single-workload scenarios open their detail straight away (demo flow)
+      setSelectedId(res.data.results.length === 1 ? res.data.results[0].workload_id : null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load analysis')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [scenario])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    if (isDesktop || !selectedId) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSelectedId(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isDesktop, selectedId])
 
   const visible = useMemo(
     () => (state?.data.results ?? []).filter((r) => filter === 'all' || r.decision === filter),
     [state, filter],
   )
   const selected = state?.data.results.find((r) => r.workload_id === selectedId) ?? null
+
+  const exportReport = () => {
+    if (!state) return
+    downloadText('finops-decision-report.md', buildReport(state.data), 'text/markdown')
+    toast.success('Report saved as finops-decision-report.md')
+  }
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-4 py-8">
@@ -56,10 +95,15 @@ export default function App() {
               {state.source === 'api' ? `Live API · ${state.data.mode}` : 'Mock data · API offline'}
             </Badge>
           )}
-          <ThemeToggle />
-          <Button onClick={() => void load()} disabled={loading}>
-            <RefreshCw className={cn(loading && 'animate-spin')} aria-hidden />{loading ? 'Running…' : 'Run analysis'}
-          </Button>
+          {state?.source === 'mock' && <ScenarioSwitcher value={scenario} onChange={setScenario} />}
+          <div className="flex items-center gap-2 print:hidden">
+            <Button variant="outline" size="icon" onClick={exportReport} disabled={!state} aria-label="Export report as Markdown" title="Export report (Markdown)"><FileDown /></Button>
+            <Button variant="outline" size="icon" onClick={() => window.print()} disabled={!state} aria-label="Print or save as PDF" title="Print / save as PDF"><Printer /></Button>
+            <ThemeToggle />
+            <Button onClick={() => void load()} disabled={loading}>
+              <RefreshCw className={cn(loading && 'animate-spin')} aria-hidden />{loading ? 'Running…' : 'Run analysis'}
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -68,7 +112,7 @@ export default function App() {
           <TriangleAlert className="size-4 shrink-0" aria-hidden />{error}
         </p>
       )}
-      {loading && !state && <p className="text-sm text-muted-foreground">Loading…</p>}
+      {loading && !state && <LoadingSkeleton />}
 
       {state && (
         <>
@@ -80,19 +124,33 @@ export default function App() {
           <Workflow data={state.data} />
           <InputStatus data={state.data} />
           <SummaryCards summary={state.data.summary} active={filter} onFilter={setFilter} />
+          <div className="grid gap-6 md:grid-cols-2">
+            <DecisionDonut summary={state.data.summary} active={filter} onFilter={setFilter} />
+            <SavingsChart results={state.data.results} />
+          </div>
           <div className="grid items-start gap-6 lg:grid-cols-[1fr_440px]">
             <ResultsTable results={visible} selectedId={selectedId} onSelect={setSelectedId} />
-            {selected ? (
+            {isDesktop && (selected ? (
               <DetailPanel key={selected.workload_id} result={selected} />
             ) : (
               <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">Select a workload to see evidence, the critic's audit trail and the proposed patch.</p>
-            )}
+            ))}
           </div>
           <footer className="border-t pt-4 text-xs text-muted-foreground">
             Prototype using local/mock data. Savings are illustrative estimates, not guaranteed bill reductions. Every change requires human approval; nothing is applied to a cluster.
           </footer>
         </>
       )}
+
+      {!isDesktop && selected && (
+        <>
+          <div className="fixed inset-0 z-40 bg-black/50 animate-in fade-in" onClick={() => setSelectedId(null)} aria-hidden />
+          <div role="dialog" aria-modal="true" aria-label={`${selected.workload_id} details`} className="fixed inset-x-0 bottom-0 z-50 max-h-[88vh] overflow-y-auto rounded-t-2xl animate-in slide-in-from-bottom duration-300 motion-reduce:animate-none print:hidden">
+            <DetailPanel key={selected.workload_id} result={selected} onClose={() => setSelectedId(null)} className="rounded-b-none rounded-t-2xl border-b-0 animate-none" />
+          </div>
+        </>
+      )}
+      <AppToaster />
     </div>
   )
 }
