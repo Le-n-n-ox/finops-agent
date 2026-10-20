@@ -1,14 +1,19 @@
 """POST /api/analyze and POST /api/simulate."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from app.api.deps import Services, api_errors, get_services
 from app.models.review import ResourceRequests, SimulationRequest, SimulationResult
-from app.models.schemas import AnalysisResponse
-from app.services.orchestrator import run_and_record
+from app.models.schemas import AnalysisResponse, ValidationResponse
+from app.services.orchestrator import run_analysis, run_and_record
+from app.services.report_service import render_markdown_report
 from app.services.simulator import simulate_recommendation
+from app.services.validation_service import validate_data
 
 router = APIRouter(prefix="/api", tags=["analysis"])
 
@@ -21,8 +26,31 @@ class AnalyzeRequest(BaseModel):
 
 @router.post("/analyze", response_model=AnalysisResponse)
 def analyze(_: AnalyzeRequest | None = None, svc: Services = Depends(get_services)) -> AnalysisResponse:
+    """Triggers the full FinOps analysis pipeline and returns structured results."""
     with api_errors():
         return run_and_record(svc.store, inputs_fn=svc.inputs_fn, proposals_fn=svc.proposals_fn)
+
+
+@router.get("/validation", response_model=ValidationResponse)
+def validation() -> ValidationResponse:
+    """Report ingestion issues and per-workload metric completeness and freshness."""
+    return validate_data()
+
+
+@router.get("/report")
+def report(format: Literal["json", "markdown"] = "json") -> Response:
+    """Generate a fresh, review-only audit report as JSON or Markdown."""
+    analysis = run_analysis()
+    if format == "markdown":
+        return Response(
+            content=render_markdown_report(analysis),
+            media_type="text/markdown; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="finops-audit-report.md"'},
+        )
+    return JSONResponse(
+        content=analysis.model_dump(mode="json"),
+        headers={"Content-Disposition": 'attachment; filename="finops-audit-report.json"'},
+    )
 
 
 @router.post("/simulate", response_model=SimulationResult)

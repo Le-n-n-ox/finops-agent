@@ -95,6 +95,7 @@ def run_analysis_with_bundle(
         estimated_monthly_savings_usd=round(
             sum(r.monthly_savings_estimate_usd for r in results if r.decision is DecisionStatus.APPROVED), 2),
     )
+
     warnings = [DISCLAIMER]
     if bundle.policy.simulation_now:
         warnings.append(f"Demo clock fixed at {bundle.policy.simulation_now.isoformat()}.")
