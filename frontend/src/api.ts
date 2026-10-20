@@ -5,15 +5,34 @@ export interface LoadResult {
   source: 'api' | 'mock'
 }
 
-/** Try POST /api/analyze; fall back to the bundled sample payload so the UI works before the backend does. */
-export async function runAnalysis(): Promise<LoadResult> {
+export interface ScenarioInfo { id: string; label: string; description: string }
+
+/**
+ * Try POST /api/analyze; fall back to bundled fixtures so the UI works before the backend does.
+ * `scenario` is sent to the API (ignored until backend supports it) and selects the mock fixture.
+ */
+export async function runAnalysis(scenario = 'all'): Promise<LoadResult> {
   try {
-    const res = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+    const res = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario }),
+    })
     if (!res.ok) throw new Error(`API ${res.status}`)
     return { data: (await res.json()) as AnalysisResponse, source: 'api' }
   } catch {
-    const res = await fetch('/mock/analysis.json')
-    if (!res.ok) throw new Error('Mock data not found')
+    const safe = /^[a-z-]+$/.test(scenario) ? scenario : 'all'
+    const res = await fetch(safe === 'all' ? '/mock/analysis.json' : `/mock/scenarios/${safe}.json`)
+    if (!res.ok) throw new Error('Mock data not found. Run: npm run mock')
     return { data: (await res.json()) as AnalysisResponse, source: 'mock' }
+  }
+}
+
+export async function loadScenarios(): Promise<ScenarioInfo[]> {
+  try {
+    const res = await fetch('/mock/scenarios.json')
+    return res.ok ? ((await res.json()) as ScenarioInfo[]) : []
+  } catch {
+    return []
   }
 }

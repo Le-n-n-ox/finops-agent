@@ -83,3 +83,8 @@ body {
   background-image: radial-gradient(60rem 28rem at 50% -8%, oklch(0.6 0.12 185 / 0.18), transparent); }
 
   body { font-family: var(--font-sans); }
+
+  @media print {
+  body { background: none; }
+  * { animation: none !important; box-shadow: none !important; }
+}
