@@ -11,3 +11,5 @@ outputs/*
 !outputs/.gitkeep
 .DS_Store
 *.jar
+
+finops_history.sqlite3
