@@ -11,7 +11,7 @@ import os
 import httpx
 
 NIM_URL = os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")
-NIM_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.1-70b-instruct")
+NIM_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct")
 
 
 def explain(decision: str, checks: list[dict]) -> str | None:
@@ -31,6 +31,7 @@ def explain(decision: str, checks: list[dict]) -> str | None:
             timeout=20,
         )
         r.raise_for_status()
-        return r.json()["choices"][0]["message"]["content"].strip()
+        text = r.json()["choices"][0]["message"].get("content")
+        return text.strip() if text else None
     except Exception:
         return None  # explanation is optional; never break the pipeline
