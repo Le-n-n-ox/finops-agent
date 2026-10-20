@@ -30,7 +30,7 @@ def test_over_provisioned_service_is_proposed_with_metrics():
 
 def test_insufficient_history():
     p = _by_id()["email-worker"]
-    assert p.status == "insufficient_data" and p.proposed is None
+    assert p.status == "needs_review" and p.proposed is None
 
 
 def test_never_below_p99_floor_and_limits_untouched():

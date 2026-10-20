@@ -31,7 +31,7 @@
         "proposal_id": "PRP-0004",
         "workload_id": "session-store",
         "namespace": "core",
-        "status": "no_action",
+        "status": "no_change",
         "current": {
           "cpu_request_millicores": 500,
           "cpu_limit_millicores": 1000,
