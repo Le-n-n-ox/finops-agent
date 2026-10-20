@@ -45,6 +45,20 @@ export interface CriticCheck {
   evidence: Record<string, unknown>
 }
 
+/** OPTIONAL (not yet in schemas.py): hourly usage for the evidence chart. */
+export interface UsagePoint {
+   t: string; 
+   cpu: number; 
+   mem: number
+   }
+/** OPTIONAL (not yet in schemas.py): business events overlapping the decision. */
+
+export interface EventWindow { 
+  name: string; 
+  start_at: string; 
+  end_at: string; 
+  risk?: string
+ }
 export interface WorkloadResult {
   workload_id: string
   namespace: string
@@ -74,4 +88,9 @@ export interface AnalysisResponse {
   summary: AnalysisSummary
   results: WorkloadResult[]
   warnings: string[]
+}
+
+  yaml_patch: string | null
+  usage_series?: UsagePoint[]
+  events?: EventWindow[]
 }
