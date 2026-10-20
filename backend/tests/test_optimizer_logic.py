@@ -51,25 +51,25 @@ def test_limits_are_never_changed():
     assert p.current.cpu_limit_millicores == 2000 and p.current.memory_limit_mib == 8192
 
 
-def test_too_few_samples_is_insufficient_data():
+def test_too_few_samples_needs_review():
     p = analyze_workload(workload(), rows(n=10), now=NOW)
-    assert p.status == "insufficient_data" and p.proposed is None and "10 observations" in p.reasons[0]
+    assert p.status == "needs_review" and p.proposed is None and "10 observations" in p.reasons[0]
 
 
-def test_short_span_is_insufficient_data():
+def test_short_span_needs_review():
     dense = [UsageRow(timestamp=START + timedelta(minutes=10 * i), service="svc", cpu_millicores=200, memory_mib=800)
              for i in range(30)]                                  # 30 samples but only ~5h
     p = analyze_workload(workload(), dense, now=START + timedelta(hours=6))
-    assert p.status == "insufficient_data" and any("spans" in r for r in p.reasons)
+    assert p.status == "needs_review" and any("spans" in r for r in p.reasons)
 
 
-def test_stale_metrics_are_insufficient_data():
+def test_stale_metrics_need_review():
     p = analyze_workload(workload(), rows(), now=NOW + timedelta(days=10))
-    assert p.status == "insufficient_data" and any("old" in r for r in p.reasons)
+    assert p.status == "needs_review" and any("old" in r for r in p.reasons)
 
 
-def test_no_rows_is_insufficient_data():
-    assert analyze_workload(workload(), [], now=NOW).status == "insufficient_data"
+def test_no_rows_needs_review():
+    assert analyze_workload(workload(), [], now=NOW).status == "needs_review"
 
 
 def test_peak_near_request_blocks_reduction_and_respects_p99_floor():
@@ -87,7 +87,7 @@ def test_peak_near_request_blocks_reduction_and_respects_p99_floor():
 
 def test_usage_above_request_warns_and_never_raises_request():
     p = analyze_workload(workload(cpu=100, mem=500), rows(cpu=300, mem=900), now=NOW)
-    assert p.status == "no_action" and p.warnings and p.proposed is None
+    assert p.status == "no_change" and p.warnings and p.proposed is None
 
 
 def test_exactly_15_percent_below_is_proposed():
@@ -98,9 +98,9 @@ def test_exactly_15_percent_below_is_proposed():
     assert p.proposed.cpu_request_millicores == 850
 
 
-def test_small_reduction_is_no_action():
+def test_small_reduction_is_no_change():
     p = analyze_workload(workload(cpu=1000, mem=1100), rows(cpu=700, mem=800), now=NOW)  # 875 / 1040 > 85% of request
-    assert p.status == "no_action" and "less than 15%" in " ".join(p.reasons)
+    assert p.status == "no_change" and "less than 15%" in " ".join(p.reasons)
 
 
 def test_without_cost_model_saving_is_zero():
@@ -115,7 +115,7 @@ def test_build_proposals_one_per_workload_and_unknown_rows_not_assigned():
     )
     out = build_proposals(bundle)
     assert [p.workload_id for p in out] == ["a", "b"]
-    assert out[0].status == "proposed" and out[1].status == "insufficient_data"
+    assert out[0].status == "proposed" and out[1].status == "needs_review"
 
 
 def test_results_are_deterministic():

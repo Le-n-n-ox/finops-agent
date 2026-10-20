@@ -31,7 +31,7 @@
         "proposal_id": "PRP-0003",
         "workload_id": "email-worker",
         "namespace": "jobs",
-        "status": "insufficient_data",
+        "status": "needs_review",
         "current": {
           "cpu_request_millicores": 500,
           "cpu_limit_millicores": 1500,

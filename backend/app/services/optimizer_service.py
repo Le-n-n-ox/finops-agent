@@ -78,7 +78,7 @@ def analyze_workload(
             workload_id=workload_id,
             namespace=namespace,
             current=current,
-            status=ProposalStatus.INSUFFICIENT_DATA,
+            status=ProposalStatus.NEEDS_REVIEW,
             metrics=metrics,
             reasons=["No usage observations."],
             created_at=now,
@@ -97,7 +97,7 @@ def analyze_workload(
             workload_id=workload_id,
             namespace=namespace,
             current=current,
-            status=ProposalStatus.INSUFFICIENT_DATA,
+            status=ProposalStatus.NEEDS_REVIEW,
             metrics=metrics,
             reasons=[f"Only {len(ordered_rows)} observations; need {policy.min_samples}."],
             created_at=now,
@@ -108,7 +108,7 @@ def analyze_workload(
             workload_id=workload_id,
             namespace=namespace,
             current=current,
-            status=ProposalStatus.INSUFFICIENT_DATA,
+            status=ProposalStatus.NEEDS_REVIEW,
             metrics=metrics,
             reasons=[f"Usage history spans {span_hours:.1f} hours; need {policy.min_span_hours:.1f}."],
             created_at=now,
@@ -119,7 +119,7 @@ def analyze_workload(
             workload_id=workload_id,
             namespace=namespace,
             current=current,
-            status=ProposalStatus.INSUFFICIENT_DATA,
+            status=ProposalStatus.NEEDS_REVIEW,
             metrics=metrics,
             reasons=[f"Latest metric is {latest_age:.1f} hours old; metrics older than "
                      f"{policy.max_metric_age_hours:.1f} hours are insufficient."],
@@ -154,40 +154,42 @@ def analyze_workload(
     cpu_current = workload.cpu_request_millicores or 0
     mem_current = workload.memory_request_mib or 0
 
-    if cpu_p99 > cpu_current or mem_p99 > mem_current:
+    minimum_remaining_ratio = 1 - policy.min_reduction_pct / 100
+    cpu_is_reduced = (
+        cpu_p99 <= cpu_current
+        and cpu_candidate < cpu_current
+        and cpu_candidate <= cpu_current * minimum_remaining_ratio
+    )
+    mem_is_reduced = (
+        mem_p99 <= mem_current
+        and mem_candidate < mem_current
+        and mem_candidate <= mem_current * minimum_remaining_ratio
+    )
+    if not cpu_is_reduced and not mem_is_reduced:
+        warnings: list[str] = []
+        if cpu_p99 > cpu_current or mem_p99 > mem_current:
+            warnings.append("Observed P99 usage exceeds a current request; requests will not be raised.")
         return OptimizationProposal(
             proposal_id=proposal_id,
             workload_id=workload_id,
             namespace=namespace,
             current=current,
-            status=ProposalStatus.NO_ACTION,
-            metrics=metrics,
-            reasons=["Observed P99 usage exceeds a current request; requests will not be raised."],
-            warnings=["Usage exceeded the configured request."],
-            created_at=now,
-        )
-
-    cpu_reduction = (cpu_current - cpu_candidate) / cpu_current * 100 if cpu_current > 0 else 0
-    mem_reduction = (mem_current - mem_candidate) / mem_current * 100 if mem_current > 0 else 0
-    if (cpu_candidate >= cpu_current or mem_candidate >= mem_current or
-            max(cpu_reduction, mem_reduction) < policy.min_reduction_pct):
-        return OptimizationProposal(
-            proposal_id=proposal_id,
-            workload_id=workload_id,
-            namespace=namespace,
-            current=current,
-            status=ProposalStatus.NO_ACTION,
+            status=ProposalStatus.NO_CHANGE,
             metrics=metrics,
             reasons=[f"Potential reduction is less than {policy.min_reduction_pct:g}% for both resources."],
+            warnings=warnings,
             created_at=now,
         )
 
+    proposed_cpu = cpu_candidate if cpu_is_reduced else cpu_current
+    proposed_mem = mem_candidate if mem_is_reduced else mem_current
     proposed = ResourceSettings(
-        cpu_request_millicores=min(cpu_candidate, cpu_current),
-        memory_request_mib=min(mem_candidate, mem_current),
-        cpu_limit_millicores=workload.cpu_limit_millicores,
-        memory_limit_mib=workload.memory_limit_mib,
+        cpu_request_millicores=proposed_cpu,
+        memory_request_mib=proposed_mem,
     )
+    warnings: list[str] = []
+    if cpu_p99 > cpu_current or mem_p99 > mem_current:
+        warnings.append("Observed P99 usage exceeds a current request; that resource will not be reduced.")
     savings = _estimate_savings(workload, proposed, cost_model)
     return OptimizationProposal(
         proposal_id=proposal_id,
@@ -197,7 +199,8 @@ def analyze_workload(
         proposed=proposed,
         status=ProposalStatus.PROPOSED,
         metrics=metrics,
-        reasons=["Requests can be reduced while staying above the configured P99 safety floor."],
+        reasons=["Eligible requests meet the minimum reduction threshold and stay above the P99 safety floor."],
+        warnings=warnings,
         estimated_monthly_saving_usd=savings,
         created_at=now,
     )

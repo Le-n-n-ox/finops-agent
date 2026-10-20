@@ -24,7 +24,7 @@ def evaluate_proposal(proposal: OptimizationProposal, bundle: InputBundle) -> Wo
     now = _as_utc(bundle.policy.simulation_now or datetime.now(timezone.utc))
     checks: list[CriticCheck] = []
 
-    if proposal.status == ProposalStatus.INSUFFICIENT_DATA:
+    if proposal.status == ProposalStatus.NEEDS_REVIEW:
         checks.append(CriticCheck(
             name="metrics_completeness",
             code="INSUFFICIENT_METRICS",
@@ -37,7 +37,7 @@ def evaluate_proposal(proposal: OptimizationProposal, bundle: InputBundle) -> Wo
             "Insufficient usage data to generate a safe recommendation.", checks,
         )
 
-    if proposal.status == ProposalStatus.NO_ACTION or proposal.proposed is None:
+    if proposal.status == ProposalStatus.NO_CHANGE or proposal.proposed is None:
         checks.append(CriticCheck(
             name="optimizer_status",
             code="NO_OPTIMIZATION_NEEDED",

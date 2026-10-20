@@ -8,19 +8,19 @@ Rules (see docs/CONTRACT.md):
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # --------------------------------------------------------------------------- enums
 class ProposalStatus(str, Enum):
     """Optimizer output (Developer 1)."""
     PROPOSED = "proposed"
-    NO_ACTION = "no_action"
-    INSUFFICIENT_DATA = "insufficient_data"
+    NO_CHANGE = "no_change"
+    NEEDS_REVIEW = "needs_review"
 
 
 class DecisionStatus(str, Enum):
@@ -63,6 +63,19 @@ class UsageRow(BaseModel):
     cpu_millicores: float = Field(ge=0)
     memory_mib: float = Field(ge=0)
 
+    @field_validator("timestamp", mode="before")
+    @classmethod
+    def ensure_utc_timestamp(cls, value: Any) -> Any:
+        """Interpret naive timestamps as UTC and normalize aware timestamps to UTC."""
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if isinstance(value, datetime):
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            else:
+                value = value.astimezone(timezone.utc)
+        return value
+
 
 class BusinessEvent(BaseModel):
     """One entry of data/business_events.json."""
@@ -101,7 +114,7 @@ class OptimizerPolicy(BaseModel):
     cpu_round_millicores: int = 10
     memory_round_mib: int = 64
     min_reduction_pct: float = 15.0
-    max_metric_age_hours: float = 72   # latest metric older than this -> insufficient_data
+    max_metric_age_hours: float = 72   # latest metric older than this -> needs_review
 
 
 class CriticPolicy(BaseModel):
