@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { FileDown, Info, Lock, Printer, RefreshCw, ServerCog, TriangleAlert } from 'lucide-react'
+import { FileDown, FileJson2, Info, Lock, Printer, RefreshCw, ServerCog, TriangleAlert } from 'lucide-react'
 import { runAnalysis, type LoadResult } from '@/api'
 import type { DecisionStatus } from '@/types'
 import { Badge } from '@/components/ui/badge'
@@ -72,10 +72,25 @@ export default function App() {
   )
   const selected = state?.data.results.find((r) => r.workload_id === selectedId) ?? null
 
-  const exportReport = () => {
+  const exportReport = async (format: 'markdown' | 'json') => {
     if (!state) return
-    downloadText('finops-decision-report.md', buildReport(state.data), 'text/markdown')
-    toast.success('Report saved as finops-decision-report.md')
+    const extension = format === 'markdown' ? 'md' : 'json'
+    const filename = `finops-audit-report.${extension}`
+    try {
+      if (state.source === 'api') {
+        const response = await fetch(`/api/report?format=${format}`)
+        if (!response.ok) throw new Error(`Report API ${response.status}`)
+        const content = format === 'markdown' ? await response.text() : JSON.stringify(await response.json(), null, 2)
+        downloadText(filename, content, format === 'markdown' ? 'text/markdown' : 'application/json')
+      } else if (format === 'markdown') {
+        downloadText(filename, buildReport(state.data), 'text/markdown')
+      } else {
+        downloadText(filename, JSON.stringify(state.data, null, 2), 'application/json')
+      }
+      toast.success(`Report saved as ${filename}`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Could not export audit report')
+    }
   }
 
   return (
@@ -97,7 +112,8 @@ export default function App() {
           )}
           {state?.source === 'mock' && <ScenarioSwitcher value={scenario} onChange={setScenario} />}
           <div className="flex items-center gap-2 print:hidden">
-            <Button variant="outline" size="icon" onClick={exportReport} disabled={!state} aria-label="Export report as Markdown" title="Export report (Markdown)"><FileDown /></Button>
+            <Button variant="outline" size="icon" onClick={() => void exportReport('markdown')} disabled={!state} aria-label="Export report as Markdown" title="Export report (Markdown)"><FileDown /></Button>
+            <Button variant="outline" size="icon" onClick={() => void exportReport('json')} disabled={!state} aria-label="Export audit data as JSON" title="Export audit data (JSON)"><FileJson2 /></Button>
             <Button variant="outline" size="icon" onClick={() => window.print()} disabled={!state} aria-label="Print or save as PDF" title="Print / save as PDF"><Printer /></Button>
             <ThemeToggle />
             <Button onClick={() => void load()} disabled={loading}>

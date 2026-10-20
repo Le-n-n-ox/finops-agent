@@ -18,6 +18,7 @@ import yaml
 from pydantic import BaseModel, ValidationError
 
 from app.integrations.zetaris_client import ZetarisClient
+from app.services.incident_service import normalize_incident_row
 from app.models.schemas import (
     BusinessEvent,
     CostModel,
@@ -87,6 +88,11 @@ def _fix_event(rec: dict[str, Any]) -> dict[str, Any]:
     return rec
 
 
+def _fix_incident(rec: dict[str, Any]) -> dict[str, Any]:
+    """Accept either the repository contract or Developer 1 guide column names."""
+    return normalize_incident_row(rec)
+
+
 def _collect(
     model: type[T],
     records: list[Any],
@@ -111,7 +117,7 @@ def bundle_from_records(raw: dict[str, list[Any]], data_dir: str | Path = "data"
     services = _collect(WorkloadSpec, raw.get("deployments", []), "deployments", issues)
     usage = _collect(UsageRow, raw.get("usage_history", []), "usage_history", issues)
     events = _collect(BusinessEvent, raw.get("business_events", []), "business_events", issues, _fix_event)
-    incidents = _collect(IncidentRecord, raw.get("incident_history", []), "incident_history", issues)
+    incidents = _collect(IncidentRecord, raw.get("incident_history", []), "incident_history", issues, _fix_incident)
 
     cost_model = CostModel(**json.loads((data_dir / "cost_model.json").read_text()))
     policy = Policy(**yaml.safe_load((data_dir / "policy.yaml").read_text()))
