@@ -53,6 +53,17 @@ export default function InputStatus({ data }: { data: AnalysisResponse }) {
             ))}
           </ul>
         )}
+        {data.data_health?.workloads.map((workload) => (
+          <div key={workload.workload_id} className="rounded-md border bg-background px-3 py-2 text-sm">
+            <p className="font-medium">
+              {workload.workload_id} <span className={workload.status === 'healthy' ? 'text-emerald-600' : workload.status === 'error' ? 'text-red-600' : 'text-amber-600'}>· {workload.status}</span>
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {workload.sample_count}/{workload.required_samples} samples · {workload.span_hours.toFixed(1)}/{workload.required_span_hours.toFixed(1)} h history
+              {workload.latest_metric_age_hours !== null ? ` · latest ${workload.latest_metric_age_hours.toFixed(1)} h ago` : ' · no metrics'}
+            </p>
+          </div>
+        ))}
       </CardContent>
     </Card>
   )

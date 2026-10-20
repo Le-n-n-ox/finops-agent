@@ -16,6 +16,7 @@ from app.models.schemas import (
 from app.services.critic_service import evaluate_proposal
 from app.services.data_loader import get_inputs
 from app.services.optimizer_service import build_proposals
+from app.services.validation_service import validation_from_bundle
 
 
 def run_analysis(
@@ -51,6 +52,7 @@ def run_analysis(
         ),
     )
     warnings = [issue.message for issue in bundle.issues if issue.severity == "warning"]
+    validation = validation_from_bundle(bundle)
     return AnalysisResponse(
         analysis_id=f"analysis-{uuid.uuid4().hex[:8]}",
         generated_at=now,
@@ -58,4 +60,6 @@ def run_analysis(
         summary=summary,
         results=results,
         warnings=warnings,
+        input_issues=validation.issues,
+        data_health=validation,
     )

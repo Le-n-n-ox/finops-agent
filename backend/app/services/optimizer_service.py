@@ -4,16 +4,28 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from app.models.schemas import (
+    AnomalyConfig,
     CostModel,
+    DataQualityResult,
+    IncidentEvidence,
+    IncidentRecord,
     InputBundle,
+    MetricWindow,
     OptimizationProposal,
     OptimizerPolicy,
     ProposalStatus,
     ResourceSettings,
+    SavingsEstimate,
     UsageMetrics,
+    UsageAnomaly,
     UsageRow,
+    UsageSummary,
     WorkloadSpec,
 )
+from app.services.confidence_service import calculate_recommendation_confidence, score_priority
+from app.services.data_loader import validate_usage_history
+from app.services.incident_service import find_relevant_incidents, incident_quality_warning
+from app.services.usage_service import detect_usage_anomalies, summarize_usage
 
 
 def percentile(values: list[float], percentile_value: float) -> float:
@@ -37,7 +49,7 @@ def round_up(value: float, unit: int) -> int:
     return int(-(-value // unit) * unit)
 
 
-def analyze_workload(
+def _analyze_workload_core(
     workload: WorkloadSpec,
     rows: list[UsageRow],
     policy: OptimizerPolicy | None = None,
@@ -45,7 +57,7 @@ def analyze_workload(
     cost_model: CostModel | None = None,
 ) -> OptimizationProposal:
     """Analyze one workload and return its proposal or a reason for no change."""
-    policy = policy or OptimizerPolicy()
+    effective_policy = policy if policy is not None else OptimizerPolicy()
     now = now or datetime.now(timezone.utc)
     ordered_rows = sorted(rows, key=lambda row: row.timestamp)
     times = [row.timestamp for row in ordered_rows]
@@ -91,7 +103,7 @@ def analyze_workload(
         last_observed_at=times[-1],
     )
 
-    if len(ordered_rows) < policy.min_samples:
+    if len(ordered_rows) < effective_policy.min_samples:
         return OptimizationProposal(
             proposal_id=proposal_id,
             workload_id=workload_id,
@@ -99,10 +111,10 @@ def analyze_workload(
             current=current,
             status=ProposalStatus.NEEDS_REVIEW,
             metrics=metrics,
-            reasons=[f"Only {len(ordered_rows)} observations; need {policy.min_samples}."],
+            reasons=[f"Only {len(ordered_rows)} observations; need {effective_policy.min_samples}."],
             created_at=now,
         )
-    if span_hours < policy.min_span_hours:
+    if span_hours < effective_policy.min_span_hours:
         return OptimizationProposal(
             proposal_id=proposal_id,
             workload_id=workload_id,
@@ -110,10 +122,10 @@ def analyze_workload(
             current=current,
             status=ProposalStatus.NEEDS_REVIEW,
             metrics=metrics,
-            reasons=[f"Usage history spans {span_hours:.1f} hours; need {policy.min_span_hours:.1f}."],
+            reasons=[f"Usage history spans {span_hours:.1f} hours; need {effective_policy.min_span_hours:.1f}."],
             created_at=now,
         )
-    if latest_age > policy.max_metric_age_hours:
+    if latest_age > effective_policy.max_metric_age_hours:
         return OptimizationProposal(
             proposal_id=proposal_id,
             workload_id=workload_id,
@@ -122,7 +134,7 @@ def analyze_workload(
             status=ProposalStatus.NEEDS_REVIEW,
             metrics=metrics,
             reasons=[f"Latest metric is {latest_age:.1f} hours old; metrics older than "
-                     f"{policy.max_metric_age_hours:.1f} hours are insufficient."],
+                     f"{effective_policy.max_metric_age_hours:.1f} hours are insufficient."],
             created_at=now,
         )
 
@@ -144,17 +156,17 @@ def analyze_workload(
     )
 
     cpu_candidate = round_up(
-        max(cpu_p95 * policy.cpu_p95_multiplier, cpu_p99 * policy.cpu_p99_multiplier),
-        policy.cpu_round_millicores,
+        max(cpu_p95 * effective_policy.cpu_p95_multiplier, cpu_p99 * effective_policy.cpu_p99_multiplier),
+        effective_policy.cpu_round_millicores,
     )
     mem_candidate = round_up(
-        max(mem_p95 * policy.memory_p95_multiplier, mem_p99 * policy.memory_p99_multiplier),
-        policy.memory_round_mib,
+        max(mem_p95 * effective_policy.memory_p95_multiplier, mem_p99 * effective_policy.memory_p99_multiplier),
+        effective_policy.memory_round_mib,
     )
     cpu_current = workload.cpu_request_millicores or 0
     mem_current = workload.memory_request_mib or 0
 
-    minimum_remaining_ratio = 1 - policy.min_reduction_pct / 100
+    minimum_remaining_ratio = 1 - effective_policy.min_reduction_pct / 100
     cpu_is_reduced = (
         cpu_p99 <= cpu_current
         and cpu_candidate < cpu_current
@@ -176,7 +188,7 @@ def analyze_workload(
             current=current,
             status=ProposalStatus.NO_CHANGE,
             metrics=metrics,
-            reasons=[f"Potential reduction is less than {policy.min_reduction_pct:g}% for both resources."],
+            reasons=[f"Potential reduction is less than {effective_policy.min_reduction_pct:g}% for both resources."],
             warnings=warnings,
             created_at=now,
         )
@@ -215,10 +227,201 @@ def build_proposals(bundle: InputBundle, now: datetime | None = None) -> list[Op
         if row.service in known_services:
             by_service.setdefault(row.service, []).append(row)
     return [
-        analyze_workload(service, by_service.get(service.name, []), bundle.policy.optimizer,
-                         effective_now, bundle.cost_model)
+        analyze_workload(
+            service,
+            by_service.get(service.name, []),
+            bundle.policy.optimizer,
+            effective_now,
+            bundle.cost_model,
+            incidents=bundle.incidents,
+            data_issues=[issue for issue in bundle.issues
+                         if issue.workload_id in (None, service.name)
+                         and (issue.source in ("usage_history.csv", "incident_history.csv", "usage_history", "incident_history")
+                              or issue.code in {"BAD_ROW", "MISSING_COLUMNS", "UNKNOWN_SERVICE"})],
+        )
         for service in bundle.services
     ]
+
+
+def analyze_workload(
+    workload: WorkloadSpec,
+    rows: list[UsageRow],
+    policy: OptimizerPolicy | None = None,
+    now: datetime | None = None,
+    cost_model: CostModel | None = None,
+    *,
+    incidents: list[IncidentRecord] | None = None,
+    data_issues: list | None = None,
+    anomaly_config: AnomalyConfig | None = None,
+) -> OptimizationProposal:
+    """Build a conservative optimizer proposal enriched with evidence and confidence."""
+    effective_policy = policy if policy is not None else OptimizerPolicy()
+    now = now or datetime.now(timezone.utc)
+    proposal = _analyze_workload_core(workload, rows, effective_policy, now, cost_model)
+    summary = summarize_usage(rows, workload.name, effective_policy.p99_min_samples)
+    relevant_issues = [issue for issue in (data_issues or [])
+                       if issue.workload_id in (None, workload.name)]
+    input_errors = [issue.message for issue in relevant_issues if issue.severity == "error"]
+    input_warnings = [issue.message for issue in relevant_issues if issue.severity != "error"]
+    missing_fields = [
+        column.strip().rstrip(".")
+        for issue in relevant_issues if issue.code == "MISSING_COLUMNS"
+        for column in issue.message.partition(":")[2].split(",")
+        if column.strip()
+    ]
+    quality = validate_usage_history(
+        rows,
+        now,
+        min_samples=effective_policy.min_samples,
+        max_age_hours=effective_policy.max_metric_age_hours,
+        workload_id=workload.name,
+        errors=input_errors,
+        missing_fields=missing_fields,
+    )
+    span = proposal.metrics.span_hours
+    if rows and span < effective_policy.min_span_hours:
+        quality.usable_for_recommendation = False
+        quality.warnings.append(f"Usage spans {span:.1f} hours; {effective_policy.min_span_hours:.1f} required.")
+    if input_warnings:
+        quality.warnings.extend(input_warnings)
+    anomalies = detect_usage_anomalies(summary, rows, anomaly_config)
+    evidence = find_relevant_incidents(
+        workload.name, incidents or [], namespace=workload.namespace,
+    )
+    incident_warning = incident_quality_warning(incidents or [], workload.name)
+    if incident_warning:
+        quality.warnings.append(incident_warning)
+
+    # A malformed row for this workload is a hard optimizer stop; the critic still owns all
+    # final review statuses and no approval/rejection is produced here.
+    if input_errors and proposal.status == ProposalStatus.PROPOSED:
+        proposal.status = ProposalStatus.NEEDS_REVIEW
+        proposal.proposed = None
+        proposal.estimated_monthly_saving_usd = 0.0
+        proposal.reasons.append("Input validation errors prevent a trustworthy recommendation.")
+
+    confidence = calculate_recommendation_confidence(
+        quality,
+        summary,
+        anomalies,
+        now,
+        min_samples=effective_policy.min_samples,
+        max_age_hours=effective_policy.max_metric_age_hours,
+        cpu_values=[row.cpu_millicores for row in rows],
+        memory_values=[row.memory_mib for row in rows],
+    )
+    savings = estimate_monthly_savings(
+        proposal.current,
+        proposal.proposed,
+        cost_model,
+        replicas=workload.replicas,
+    )
+    proposal.estimated_monthly_saving_usd = savings.monthly_savings_usd or 0.0
+    proposal.metrics.p99_reliable = summary.p99_reliable
+    proposal.data_quality = quality
+    proposal.usage_summary = summary
+    proposal.confidence = confidence
+    proposal.anomalies = anomalies
+    proposal.incident_evidence = evidence
+    proposal.metric_window = MetricWindow(
+        start=summary.window_start,
+        end=summary.window_end,
+        sample_count=summary.sample_count,
+    )
+    proposal.savings_estimate = savings
+    if quality.warnings:
+        proposal.warnings.extend(message for message in quality.warnings if message not in proposal.warnings)
+    proposal.warnings.extend(item.explanation for item in anomalies if item.explanation not in proposal.warnings)
+    proposal.warnings.extend(
+        f"Related incident {item.incident_id} ({item.match_type} match): {item.description}"
+        for item in evidence
+    )
+
+    value_score = (min(100.0, savings.monthly_savings_usd * 5.0)
+                   if savings.monthly_savings_usd is not None
+                   else min(100.0, savings.total_request_reduction_pct * 2.0))
+    proposal.priority_score, proposal.priority_breakdown = score_priority(
+        proposal, value_score, confidence.score,
+    )
+    return proposal
+
+
+def recommend_resources(
+    workload: WorkloadSpec,
+    metrics: list[UsageRow],
+    config: OptimizerPolicy | None = None,
+    *,
+    analysis_time: datetime | None = None,
+    pricing: CostModel | None = None,
+    incidents: list[IncidentRecord] | None = None,
+    data_issues: list | None = None,
+) -> OptimizationProposal:
+    """Guide-name entry point; returns the shared optimizer proposal, never a critic decision."""
+    return analyze_workload(
+        workload,
+        metrics,
+        policy=config,
+        now=analysis_time,
+        cost_model=pricing,
+        incidents=incidents,
+        data_issues=data_issues,
+    )
+
+
+def estimate_monthly_savings(
+    current: ResourceSettings,
+    proposed: ResourceSettings | None,
+    pricing: CostModel | None,
+    replicas: int = 1,
+    days: int = 30,
+) -> SavingsEstimate:
+    """Return USD only when both price rates exist; otherwise expose relative request change."""
+    if proposed is None:
+        cpu_rate = pricing.cpu_core_monthly_cost_usd if pricing is not None else None
+        memory_rate = pricing.memory_gib_monthly_cost_usd if pricing is not None else None
+        return SavingsEstimate(
+            pricing_available=cpu_rate is not None and memory_rate is not None,
+            replicas=replicas,
+            days=days,
+            assumptions=["No proposed request reduction exists."],
+        )
+    current_cpu = current.cpu_request_millicores or 0
+    next_cpu = proposed.cpu_request_millicores or 0
+    current_mem = current.memory_request_mib or 0
+    next_mem = proposed.memory_request_mib or 0
+    cpu_pct = max(0.0, (current_cpu - next_cpu) / current_cpu * 100) if current_cpu else 0.0
+    memory_pct = max(0.0, (current_mem - next_mem) / current_mem * 100) if current_mem else 0.0
+    active = [pct for pct, base in ((cpu_pct, current_cpu), (memory_pct, current_mem)) if base > 0]
+    total_pct = sum(active) / len(active) if active else 0.0
+    cpu_rate = pricing.cpu_core_monthly_cost_usd if pricing is not None else None
+    memory_rate = pricing.memory_gib_monthly_cost_usd if pricing is not None else None
+    priced = cpu_rate is not None and memory_rate is not None
+    monthly: float | None = None
+    assumptions = [f"Replica count: {replicas}.", f"Estimate period: {days} days, scaled from a 30-day month."]
+    if cpu_rate is not None and memory_rate is not None and pricing is not None:
+        cpu_delta = (current_cpu - next_cpu) / 1000
+        memory_delta = (current_mem - next_mem) / 1024
+        monthly = round(max(0.0, (cpu_delta * cpu_rate
+                                  + memory_delta * memory_rate)
+                            * replicas * days / 30), 2)
+        assumptions.append(pricing.note)
+    else:
+        assumptions.append("Pricing is unavailable; no currency value is reported.")
+    return SavingsEstimate(
+        monthly_savings_usd=monthly,
+        cpu_request_reduction_pct=round(cpu_pct, 2),
+        memory_request_reduction_pct=round(memory_pct, 2),
+        total_request_reduction_pct=round(total_pct, 2),
+        pricing_available=priced,
+        replicas=replicas,
+        days=days,
+        assumptions=assumptions,
+    )
+
+
+def rank_recommendations(recommendations: list[OptimizationProposal]) -> list[OptimizationProposal]:
+    """Sort by deterministic opportunity score; critic decisions remain out of scope."""
+    return sorted(recommendations, key=lambda proposal: -(proposal.priority_score or 0.0))
 
 
 def _estimate_savings(workload: WorkloadSpec, proposed: ResourceSettings,
@@ -231,8 +434,8 @@ def _estimate_savings(workload: WorkloadSpec, proposed: ResourceSettings,
     current_mem = workload.memory_request_mib or 0
     proposed_mem = proposed.memory_request_mib or 0
     
-    cpu_cost = cost_model.cpu_core_monthly_cost_usd or 0.0
-    mem_cost = cost_model.memory_gib_monthly_cost_usd or 0.0
+    cpu_cost = (cost_model.cpu_core_monthly_cost_usd or 0.0) if cost_model else 0.0
+    mem_cost = (cost_model.memory_gib_monthly_cost_usd or 0.0) if cost_model else 0.0
 
     cpu_delta_cores = (current_cpu - proposed_cpu) / 1000
     memory_delta_gib = (current_mem - proposed_mem) / 1024

@@ -49,6 +49,16 @@ monthly estimate =
 
 The included rates ($25 per CPU core-month and $4 per GiB-month) are illustrative values, **not a cloud-provider quote or a forecast of an actual bill reduction**. This simple model does not account for provider, region, commitment or discount terms, node packing, autoscaling, shared overhead, workload changes, or billing granularity. Treat savings as directional demo estimates; validate against your own pricing and cluster utilization before making a business decision.
 
+## Data quality and recommendation evidence
+
+The optimizer attaches a per-workload data-quality assessment, usage summary, metric window, confidence factors, detected anomalies, incident evidence, savings assumptions, and priority breakdown to each proposal. These fields extend `OptimizationProposal` in the shared schema; the optimizer status remains `proposed`, `no_change`, or `needs_review`. Only the Context Critic assigns final decisions.
+
+Usage percentiles use linear interpolation at position `(n - 1) × p`. P99 is included in `UsageSummary` only when the sample count reaches `optimizer.p99_min_samples` (100 by default); the existing P99 floor calculations remain conservatively available to the critic and are marked `p99_reliable: false` below that threshold. Trend hints compare means from the first and last quarters of the observed window. Anomaly detection compares a configurable recent sample window with its preceding mean baseline; default thresholds are a 1.5× rise and a minimum absolute increase of 100 millicores or 128 MiB.
+
+Confidence is a deterministic weighted score: validation 20%, sample sufficiency 25%, freshness 20%, usage stability 20%, and anomaly evidence 15%. Invalid or insufficient history caps the score below 40. Priority combines opportunity value (40%) and confidence (60%), then subtracts explicit anomaly and incident penalties. It is for triage only and never changes the critic's decision.
+
+Incident matches are exact-workload matches. A namespace match is labelled `direct`; missing or different namespace is labelled `indirect`. Empty or irrelevant incident history yields no fabricated evidence and adds a warning. Currency savings are produced only when both CPU and memory rates are configured. Without both rates, the proposal reports relative request-allocation reductions and leaves USD savings unset. All monetary figures scale by replicas and the requested number of days from a 30-day month.
+
 ## Demo data
 
 The `data/` directory contains synthetic fixture inputs: `deployments.yaml`, `usage_history.csv`, `business_events.json`, `incident_history.csv`, `policy.yaml`, and `cost_model.json`. The policy includes a fixed `simulation_now` so the demo scenarios and freshness decisions are repeatable. `data/sample_analysis_response.json` is a sample output. These fixtures demonstrate outcomes; they are not live production telemetry.
@@ -60,6 +70,18 @@ The `data/` directory contains synthetic fixture inputs: `deployments.yaml`, `us
 - **NVIDIA NIM:** can provide critic explanation text when configured. Deterministic critic checks remain authoritative.
 
 More details: [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) and [`docs/CONTRACT.md`](docs/CONTRACT.md).
+
+## Run with Docker Compose
+
+Start the backend API and Vite frontend together from the repository root:
+
+```bash
+docker compose up --build
+```
+
+Open `http://localhost:5173` for the frontend. It proxies `/api` requests to the backend container. The backend API remains available at `http://localhost:8000`.
+
+The API also exposes `GET /api/validation` for ingestion issues and per-workload sample coverage/freshness. `GET /api/report?format=json` and `GET /api/report?format=markdown` generate a fresh audit report with proposals, critic checks, savings estimates, warnings, and review-only YAML patches. The dashboard includes the same health summary in its analysis response and exports reports through the report endpoint when the live API is available.
 
 ## Run locally
 
@@ -91,4 +113,131 @@ data/              Demo fixtures and policy/cost configuration
 docs/              Shared contract and integration guides
 frontend/          React + TypeScript + Vite application
 scripts/            Fixture generation and integration checks
+```
+
+```
+finops-agent
+├─ .cursor
+│  └─ rules
+│     └─ finops.mdc
+├─ .dockerignore
+├─ backend
+│  ├─ app
+│  │  ├─ api
+│  │  │  ├─ routes
+│  │  │  │  ├─ analysis.py
+│  │  │  │  └─ __init__.py
+│  │  │  └─ __init__.py
+│  │  ├─ integrations
+│  │  │  ├─ meterless_runner.py
+│  │  │  ├─ nvidia_nim.py
+│  │  │  ├─ zetaris_client.py
+│  │  │  ├─ zetaris_source.py
+│  │  │  └─ __init__.py
+│  │  ├─ main.py
+│  │  ├─ models
+│  │  │  ├─ schemas.py
+│  │  │  └─ __init__.py
+│  │  ├─ services
+│  │  │  ├─ critic_service.py
+│  │  │  ├─ data_loader.py
+│  │  │  ├─ optimizer_service.py
+│  │  │  ├─ orchestrator.py
+│  │  │  ├─ report_service.py
+│  │  │  └─ __init__.py
+│  │  └─ __init__.py
+│  ├─ requirements.txt
+│  └─ tests
+│     ├─ test_data_loader.py
+│     ├─ test_optimizer.py
+│     ├─ test_optimizer_logic.py
+│     ├─ test_schemas.py
+│     ├─ test_zetaris_client.py
+│     ├─ test_zetaris_source.py
+│     └─ __init__.py
+├─ data
+│  ├─ business_events.json
+│  ├─ cost_model.json
+│  ├─ deployments.json
+│  ├─ deployments.yaml
+│  ├─ incident_history.csv
+│  ├─ policy.yaml
+│  ├─ sample_analysis_response.json
+│  └─ usage_history.csv
+├─ docker-compose.yml
+├─ Dockerfile
+├─ docs
+│  ├─ CONTRACT.md
+│  ├─ CURSOR.md
+│  ├─ INTEGRATIONS.md
+│  └─ ZETARIS_SETUP.md
+├─ e -i HEAD~5
+├─ frontend
+│  ├─ .oxlintrc.json
+│  ├─ components.json
+│  ├─ Dockerfile
+│  ├─ index.html
+│  ├─ package-lock.json
+│  ├─ package.json
+│  ├─ public
+│  │  ├─ favicon.svg
+│  │  └─ mock
+│  │     ├─ analysis.json
+│  │     ├─ scenarios
+│  │     │  ├─ event-risk.json
+│  │     │  ├─ no-change.json
+│  │     │  ├─ normal.json
+│  │     │  ├─ spike.json
+│  │     │  └─ stale.json
+│  │     └─ scenarios.json
+│  ├─ README.md
+│  ├─ scripts
+│  │  └─ make-mock-scenarios.mjs
+│  ├─ src
+│  │  ├─ api.ts
+│  │  ├─ App.tsx
+│  │  ├─ components
+│  │  │  ├─ AppToaster.tsx
+│  │  │  ├─ DecisionBadge.tsx
+│  │  │  ├─ DecisionDonut.tsx
+│  │  │  ├─ DetailPanel.tsx
+│  │  │  ├─ InputStatus.tsx
+│  │  │  ├─ ResultsTable.tsx
+│  │  │  ├─ SavingsChart.tsx
+│  │  │  ├─ ScenarioSwitcher.tsx
+│  │  │  ├─ SummaryCards.tsx
+│  │  │  ├─ ThemeToggle.tsx
+│  │  │  ├─ ui
+│  │  │  │  ├─ badge.tsx
+│  │  │  │  ├─ button.tsx
+│  │  │  │  ├─ card.tsx
+│  │  │  │  ├─ skeleton.tsx
+│  │  │  │  ├─ table.tsx
+│  │  │  │  └─ tabs.tsx
+│  │  │  ├─ UsageChart.tsx
+│  │  │  ├─ Workflow.tsx
+│  │  │  └─ YamlDiff.tsx
+│  │  ├─ hooks
+│  │  │  ├─ useCountUp.ts
+│  │  │  └─ useMediaQuery.ts
+│  │  ├─ index.css
+│  │  ├─ lib
+│  │  │  ├─ report.ts
+│  │  │  └─ utils.ts
+│  │  ├─ main.tsx
+│  │  └─ types.ts
+│  ├─ tsconfig.app.json
+│  ├─ tsconfig.json
+│  ├─ tsconfig.node.json
+│  └─ vite.config.ts
+├─ pyrightconfig.json
+├─ pytest.ini
+├─ README.md
+└─ scripts
+   ├─ check_nvidia.py
+   ├─ check_zetaris.py
+   ├─ check_zetaris_query.py
+   ├─ generate_fixtures.py
+   └─ generate_sample_response.py
+
 ```
