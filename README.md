@@ -31,3 +31,63 @@ uvicorn app.main:app --reload --port 8000 --app-dir backend
 - Units: CPU millicores, memory MiB, ISO-8601 timestamps. Savings are illustrative estimates only.
 
 See `docs/CONTRACT.md` for decisions, `docs/INTEGRATIONS.md` for Zetaris / Meterless / Cursor / NVIDIA.
+
+```
+finops-agent
+├─ .cursor
+│  └─ rules
+│     └─ finops.mdc
+├─ backend
+│  ├─ app
+│  │  ├─ api
+│  │  │  ├─ routes
+│  │  │  │  └─ __init__.py
+│  │  │  └─ __init__.py
+│  │  ├─ integrations
+│  │  │  ├─ meterless_runner.py
+│  │  │  ├─ nvidia_nim.py
+│  │  │  ├─ zetaris_client.py
+│  │  │  └─ __init__.py
+│  │  ├─ main.py
+│  │  ├─ models
+│  │  │  ├─ schemas.py
+│  │  │  └─ __init__.py
+│  │  ├─ services
+│  │  │  ├─ critic_service.py
+│  │  │  ├─ data_loader.py
+│  │  │  ├─ optimizer_service.py
+│  │  │  ├─ orchestrator.py
+│  │  │  ├─ report_service.py
+│  │  │  └─ __init__.py
+│  │  └─ __init__.py
+│  ├─ requirements.txt
+│  └─ tests
+│     ├─ test_data_loader.py
+│     ├─ test_optimizer.py
+│     ├─ test_schemas.py
+│     └─ __init__.py
+├─ data
+│  ├─ business_events.json
+│  ├─ cost_model.json
+│  ├─ deployments.yaml
+│  ├─ incident_history.csv
+│  ├─ policy.yaml
+│  ├─ sample_analysis_response.json
+│  └─ usage_history.csv
+├─ docs
+│  ├─ CONTRACT.md
+│  ├─ CURSOR.md
+│  ├─ INTEGRATIONS.md
+│  └─ ZETARIS_SETUP.md
+├─ e -i HEAD~5
+├─ frontend
+│  └─ README.md
+├─ pyrightconfig.json
+├─ pytest.ini
+├─ README.md
+└─ scripts
+   ├─ check_zetaris.py
+   ├─ generate_fixtures.py
+   └─ generate_sample_response.py
+
+```
