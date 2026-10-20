@@ -84,14 +84,25 @@ class ZetarisClient:
         r.raise_for_status()
         first = r.json()
         token = first["queryToken"]
-        total = int(first.get("totalCount", 0))
-        records: list[Any] = list(first.get("records") or [])
+        records = _response_records(first)
+        total_count = _optional_int(first.get("totalCount", first.get("total_count")))
+        total_pages = _optional_int(first.get("totalPages", first.get("total_pages")))
+        page = int(first.get("pageNumber", 1))
         try:
-            page = int(first.get("pageNumber", 0))
-            # Stop on: all rows received, an empty page, or a safety cap (guards against a paging bug).
-            for _ in range(int(first.get("totalPages", 1)) + 2):
-                if len(records) >= total:
+            while True:
+                has_more = _has_more(first)
+                if has_more is False:
                     break
+                if total_count is not None and len(records) >= total_count:
+                    break
+                if total_pages is not None and page >= total_pages:
+                    break
+                if not records:
+                    break
+                if (total_count is None and total_pages is None and has_more is None
+                        and len(records) < page_limit):
+                    break
+
                 page += 1
                 pr = self._http.get(
                     f"{self.base_url}/api/v1.0/query/sql/page",
@@ -99,10 +110,22 @@ class ZetarisClient:
                     params={"queryToken": token, "pageLimit": page_limit, "pageNumber": page},
                 )
                 pr.raise_for_status()
-                recs = pr.json().get("records") or []
+                page_response = pr.json()
+                recs = _response_records(page_response)
                 if not recs:
                     break
                 records.extend(recs)
+                first = page_response
+                page = int(page_response.get("pageNumber", page))
+                total_count = _optional_int(
+                    page_response.get("totalCount", page_response.get("total_count"))
+                ) or total_count
+                total_pages = _optional_int(
+                    page_response.get("totalPages", page_response.get("total_pages"))
+                ) or total_pages
+                if (total_count is None and total_pages is None and _has_more(page_response) is None
+                        and len(recs) < page_limit):
+                    break
         finally:
             try:
                 self._http.delete(
@@ -115,3 +138,34 @@ class ZetarisClient:
     def fetch_raw_tables(self, database: str = DEFAULT_DATABASE) -> dict[str, list[Any]]:
         """SELECT * from each project table. Returns {table_name: [records]}."""
         return {t: self.query(f"SELECT * FROM {database}.{t}") for t in TABLES}
+
+
+def _response_records(response: dict[str, Any]) -> list[Any]:
+    """Extract rows from common Zetaris response field names."""
+    for key in ("records", "data", "results"):
+        rows = response.get(key)
+        if isinstance(rows, list):
+            return rows
+    return []
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _has_more(response: dict[str, Any]) -> bool | None:
+    for key in ("hasMore", "has_more", "hasNext", "has_next"):
+        if key in response:
+            value = response[key]
+            if isinstance(value, str):
+                return value.strip().lower() in {"true", "1", "yes"}
+            return bool(value)
+    for key in ("next_page", "nextPage"):
+        if key in response:
+            return response[key] not in (None, False, "", 0)
+    return None
