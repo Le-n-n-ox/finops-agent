@@ -17,10 +17,11 @@ export function DecisionBadge({ decision }: { decision: DecisionStatus }) {
 }
 
 const RISK: Record<RiskLevel, string> = {
-  low: 'text-emerald-600 dark:text-emerald-400',
-  medium: 'text-amber-600 dark:text-amber-400',
-  high: 'text-red-600 dark:text-red-400',
+  low: 'text-emerald-700 dark:text-emerald-400',
+  medium: 'text-amber-700 dark:text-amber-400',
+  high: 'text-red-700 dark:text-red-400',
 }
+
 export function RiskText({ risk, className }: { risk: RiskLevel; className?: string }) {
   return <span className={cn('font-medium capitalize', RISK[risk], className)}>{risk}</span>
 }
