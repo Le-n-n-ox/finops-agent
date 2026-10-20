@@ -8,6 +8,8 @@ export default defineConfig({
   resolve: { alias: { '@': path.resolve(import.meta.dirname, './src') } },
   server: {
     port: 5173,
-    proxy: { '/api': 'http://localhost:8000' },
+    proxy: {
+      '/api': process.env.API_PROXY_TARGET ?? 'http://localhost:8000',
+    },
   },
 })

@@ -21,6 +21,7 @@ export interface UsageMetrics {
   cpu_max?: number | null
   memory_max?: number | null
   last_observed_at?: string | null
+  p99_reliable?: boolean
 }
 
 export interface OptimizationProposal {
@@ -35,7 +36,77 @@ export interface OptimizationProposal {
   warnings: string[]
   estimated_monthly_saving_usd: number
   created_at: string
+  data_quality?: DataQualityResult | null
+  usage_summary?: UsageSummary | null
+  confidence?: ConfidenceAssessment | null
+  anomalies?: UsageAnomaly[]
+  incident_evidence?: IncidentEvidence[]
+  metric_window?: MetricWindow | null
+  savings_estimate?: SavingsEstimate | null
+  priority_score?: number | null
+  priority_breakdown?: PriorityBreakdown | null
 }
+
+export interface DataQualityResult {
+  workload_id: string
+  usable_for_recommendation: boolean
+  sample_count: number
+  last_observed_at: string | null
+  is_stale: boolean
+  missing_fields: string[]
+  errors: string[]
+  warnings: string[]
+}
+
+export interface UsageSummary {
+  workload_id: string
+  cpu_p50_m: number | null
+  cpu_p95_m: number | null
+  cpu_p99_m: number | null
+  cpu_peak_m: number | null
+  memory_p50_mib: number | null
+  memory_p95_mib: number | null
+  memory_p99_mib: number | null
+  memory_peak_mib: number | null
+  sample_count: number
+  window_start: string | null
+  window_end: string | null
+  p99_reliable: boolean
+  trend_hints: string[]
+}
+
+export interface UsageAnomaly {
+  metric_name: string
+  observed_value: number
+  baseline_value: number
+  severity: string
+  timestamp: string | null
+  explanation: string
+}
+
+export interface ConfidenceFactor { name: string; score: number; weight: number; explanation: string }
+export interface ConfidenceAssessment { score: number; label: string; factors: ConfidenceFactor[]; explanation: string }
+export interface IncidentEvidence {
+  incident_id: string
+  timestamp: string
+  incident_type: string
+  severity: string
+  description: string
+  match_type: string
+  relevance_reason: string
+}
+export interface MetricWindow { start: string | null; end: string | null; sample_count: number }
+export interface SavingsEstimate {
+  monthly_savings_usd: number | null
+  cpu_request_reduction_pct: number
+  memory_request_reduction_pct: number
+  total_request_reduction_pct: number
+  pricing_available: boolean
+  replicas: number
+  days: number
+  assumptions: string[]
+}
+export interface PriorityBreakdown { value_score: number; confidence_score: number; risk_penalty: number; explanation: string }
 
 export interface CriticCheck {
   name: string
@@ -91,4 +162,30 @@ export interface AnalysisResponse {
   results: WorkloadResult[]
   warnings: string[]
   input_issues?: ValidationIssue[]
+  data_health?: ValidationResponse | null
+}
+
+export interface WorkloadDataHealth {
+  workload_id: string
+  namespace: string
+  sample_count: number
+  required_samples: number
+  span_hours: number
+  required_span_hours: number
+  latest_metric_age_hours: number | null
+  max_metric_age_hours: number
+  missing_metrics: boolean
+  sparse_metrics: boolean
+  stale_metrics: boolean
+  status: 'healthy' | 'warning' | 'error' | string
+}
+
+export interface ValidationResponse {
+  generated_at: string
+  source: string
+  workloads_checked: number
+  error_count: number
+  warning_count: number
+  workloads: WorkloadDataHealth[]
+  issues: ValidationIssue[]
 }

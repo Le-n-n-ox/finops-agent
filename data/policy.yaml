@@ -13,6 +13,7 @@ optimizer:            # Developer 1
   memory_round_mib: 64
   min_reduction_pct: 15
   max_metric_age_hours: 72
+  p99_min_samples: 100
 
 critic:               # Developer 2
   risk_window_hours: 48
