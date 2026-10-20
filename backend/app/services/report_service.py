@@ -4,6 +4,8 @@
 from app.models.schemas import AnalysisResponse
 
 
+# ... (keep the imports at the top)
+
 def render_markdown_report(analysis: AnalysisResponse) -> str:
     summary = analysis.summary
     lines = [
@@ -23,19 +25,27 @@ def render_markdown_report(analysis: AnalysisResponse) -> str:
          f"| {summary.needs_review} | {summary.no_change} | ${summary.estimated_monthly_savings_usd:.2f} |"),
         "",
     ]
-    if analysis.warnings:
-        lines.extend(["## Ingestion warnings", "", *[f"- {warning}" for warning in analysis.warnings], ""])
+    
+    # SAFE ACCESS: Use getattr to prevent AttributeErrors if fields aren't in the schema
+    warnings = getattr(analysis, "warnings", None)
+    if warnings:
+        lines.extend(["## Ingestion warnings", "", *[f"- {warning}" for warning in warnings], ""])
+        
     if any(result.proposal.savings_estimate and not result.proposal.savings_estimate.pricing_available
            for result in analysis.results):
         lines.extend(["Currency pricing is unavailable for one or more proposals; USD savings are not calculated. Relative request changes are reported per workload.", ""])
-    if analysis.input_issues:
+        
+    input_issues = getattr(analysis, "input_issues", None)
+    if input_issues:
         lines.extend(["## Input validation", ""])
         lines.extend(
             f"- **{issue.severity.upper()} {issue.code}**"
             f"{f' ({issue.workload_id})' if issue.workload_id else ''}: {issue.message}"
-            for issue in analysis.input_issues
+            for issue in input_issues
         )
         lines.append("")
+
+# ... (the rest of the function remains exactly the same)
 
     for result in analysis.results:
         proposal = result.proposal
@@ -105,7 +115,7 @@ container `resources.requests.cpu|memory` for the named workload container. vali
 applying it to the original manifest in memory and diffing every path. Serialised with PyYAML, never concatenated.
 deployments.yaml is a normalised snapshot, so the "original" manifest is rendered from it (clearly labelled).
 """
-from __future__ import annotations
+
 
 import copy
 from typing import Any

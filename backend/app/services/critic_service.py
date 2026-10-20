@@ -442,7 +442,7 @@ def evaluate(proposal: OptimizationProposal, bundle: InputBundle, now: datetime 
         chk = _check("policy_rules", "EXCLUDED_WORKLOAD", T, "Workload is excluded from optimisation by policy", "none")
         return _result(proposal, DecisionStatus.NO_CHANGE, RiskLevel.LOW, "No change: workload is excluded from optimisation by policy.", [chk])
 
-    if proposal.status is ProposalStatus.INSUFFICIENT_DATA:
+    if proposal.status is ProposalStatus.NEEDS_REVIEW:
         m, opt = proposal.metrics, bundle.policy.optimizer
         code = "INSUFFICIENT_SAMPLES" if m.sample_count < opt.min_samples else "INSUFFICIENT_HISTORY"
         message = (f"{m.sample_count} < {opt.min_samples} samples" if code == "INSUFFICIENT_SAMPLES"
@@ -450,7 +450,7 @@ def evaluate(proposal: OptimizationProposal, bundle: InputBundle, now: datetime 
         chk = _check("metrics_completeness", code, T, message, "review", sample_count=m.sample_count, span_hours=m.span_hours)
         return _result(proposal, DecisionStatus.NEEDS_REVIEW, RiskLevel.MEDIUM, f"Needs review: {reasons or message}", [chk])
 
-    if proposal.status is ProposalStatus.NO_ACTION:
+    if proposal.status is ProposalStatus.NO_CHANGE:
         chk = _check("benefit", "BELOW_THRESHOLD", T, reasons or "No safe reduction identified", "none")
         return _result(proposal, DecisionStatus.NO_CHANGE, RiskLevel.LOW, f"No change: {reasons or 'no safe reduction identified'}", [chk])
 

@@ -11,10 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Callable
 
-
-from app.integrations.meterless_runner import get_runner
 from app.integrations.meterless_runner import AgentRunner, get_runner
-
 from app.models.schemas import (
     AnalysisResponse,
     AnalysisSummary,
@@ -26,32 +23,6 @@ from app.models.schemas import (
     UsagePoint,
     WorkloadResult,
 )
-
-from app.services.critic_service import evaluate_proposal
-from app.services.data_loader import get_inputs
-from app.services.optimizer_service import build_proposals
-from app.services.validation_service import validation_from_bundle
-
-
-def run_analysis(
-    data_dir: str | Path = "data",
-    policy_override: Policy | None = None,
-    mode: str = "demo",
-) -> AnalysisResponse:
-    """Run the complete analysis pipeline and return its dashboard response."""
-    runner = get_runner()
-
-    bundle = runner.run("collector", get_inputs, data_dir)
-    if policy_override is not None:
-        bundle.policy = policy_override
-
-    now = bundle.policy.simulation_now or datetime.now(timezone.utc)
-    proposals = runner.run("optimizer", build_proposals, bundle, now=now)
-    results: list[WorkloadResult] = [
-        runner.run("critic", evaluate_proposal, proposal, bundle)
-        for proposal in proposals
-    ]
-
 from app.services.critic_service import evaluate
 from app.services.fingerprints import fingerprint
 from app.services.report_service import with_patch
@@ -114,7 +85,6 @@ def run_analysis_with_bundle(
         extra = _chart_data(proposal.workload_id, bundle)
         results.append(patched.model_copy(update=extra) if extra else patched)
 
-
     summary = AnalysisSummary(
         workloads_evaluated=len(results),
         approved=sum(r.decision is DecisionStatus.APPROVED for r in results),
@@ -126,24 +96,17 @@ def run_analysis_with_bundle(
             sum(r.monthly_savings_estimate_usd for r in results if r.decision is DecisionStatus.APPROVED), 2),
     )
 
-    warnings = [issue.message for issue in bundle.issues if issue.severity == "warning"]
-    validation = validation_from_bundle(bundle)
-    return AnalysisResponse(
-
     warnings = [DISCLAIMER]
     if bundle.policy.simulation_now:
         warnings.append(f"Demo clock fixed at {bundle.policy.simulation_now.isoformat()}.")
 
     payload: dict = dict(
         analysis_id=f"ANL-{now:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}",
-
         generated_at=now,
         mode="demo" if bundle.policy.simulation_now else os.getenv("DATA_SOURCE", "local"),
         summary=summary,
         results=results,
         warnings=warnings,
-        input_issues=validation.issues,
-        data_health=validation,
     )
     if "input_issues" in AnalysisResponse.model_fields:
         payload["input_issues"] = bundle.issues
