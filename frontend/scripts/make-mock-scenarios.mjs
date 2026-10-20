@@ -108,11 +108,16 @@ const SCENARIOS = [
   { id: 'no-change', label: 'No safe reduction', description: 'Capacity preserved', results: [byId['session-store']] },
 ]
 
+const ISSUES = {
+  'email-worker': { severity: 'warning', code: 'INSUFFICIENT_SAMPLES', message: 'email-worker has 10 usage samples (minimum 24).', source: 'usage_history.csv', workload_id: 'email-worker' },
+}
+
 const wrap = (id, results) => ({
   ...base,
   analysis_id: `${base.analysis_id}-${id}`,
   summary: summarize(results),
   results,
+  input_issues: results.flatMap((r) => (ISSUES[r.workload_id] ? [ISSUES[r.workload_id]] : [])),
 })
 
 fs.mkdirSync(`${OUT}/scenarios`, { recursive: true })
