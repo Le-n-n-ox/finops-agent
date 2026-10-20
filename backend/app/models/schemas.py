@@ -101,6 +101,7 @@ class OptimizerPolicy(BaseModel):
     cpu_round_millicores: int = 10
     memory_round_mib: int = 64
     min_reduction_pct: float = 15.0
+    max_metric_age_hours: float = 72   # latest metric older than this -> insufficient_data
 
 
 class CriticPolicy(BaseModel):
