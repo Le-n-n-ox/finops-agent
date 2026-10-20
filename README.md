@@ -91,3 +91,106 @@ finops-agent
    └─ generate_sample_response.py
 
 ```
+```
+finops-agent
+├─ .cursor
+│  └─ rules
+│     └─ finops.mdc
+├─ backend
+│  ├─ app
+│  │  ├─ api
+│  │  │  ├─ routes
+│  │  │  │  └─ __init__.py
+│  │  │  └─ __init__.py
+│  │  ├─ integrations
+│  │  │  ├─ meterless_runner.py
+│  │  │  ├─ nvidia_nim.py
+│  │  │  ├─ zetaris_client.py
+│  │  │  ├─ zetaris_source.py
+│  │  │  └─ __init__.py
+│  │  ├─ main.py
+│  │  ├─ models
+│  │  │  ├─ schemas.py
+│  │  │  └─ __init__.py
+│  │  ├─ services
+│  │  │  ├─ critic_service.py
+│  │  │  ├─ data_loader.py
+│  │  │  ├─ optimizer_service.py
+│  │  │  ├─ orchestrator.py
+│  │  │  ├─ report_service.py
+│  │  │  └─ __init__.py
+│  │  └─ __init__.py
+│  ├─ requirements.txt
+│  └─ tests
+│     ├─ test_data_loader.py
+│     ├─ test_optimizer.py
+│     ├─ test_optimizer_logic.py
+│     ├─ test_schemas.py
+│     ├─ test_zetaris_client.py
+│     ├─ test_zetaris_source.py
+│     └─ __init__.py
+├─ data
+│  ├─ business_events.json
+│  ├─ cost_model.json
+│  ├─ deployments.json
+│  ├─ deployments.yaml
+│  ├─ incident_history.csv
+│  ├─ policy.yaml
+│  ├─ sample_analysis_response.json
+│  └─ usage_history.csv
+├─ docs
+│  ├─ CONTRACT.md
+│  ├─ CURSOR.md
+│  ├─ INTEGRATIONS.md
+│  └─ ZETARIS_SETUP.md
+├─ e -i HEAD~5
+├─ frontend
+│  ├─ .oxlintrc.json
+│  ├─ components.json
+│  ├─ index.html
+│  ├─ package-lock.json
+│  ├─ package.json
+│  ├─ public
+│  │  ├─ favicon.svg
+│  │  └─ mock
+│  │     └─ analysis.json
+│  ├─ README.md
+│  ├─ src
+│  │  ├─ api.ts
+│  │  ├─ App.tsx
+│  │  ├─ components
+│  │  │  ├─ DecisionBadge.tsx
+│  │  │  ├─ DetailPanel.tsx
+│  │  │  ├─ InputStatus.tsx
+│  │  │  ├─ ResultsTable.tsx
+│  │  │  ├─ SummaryCards.tsx
+│  │  │  ├─ ThemeToggle.tsx
+│  │  │  ├─ ui
+│  │  │  │  ├─ badge.tsx
+│  │  │  │  ├─ button.tsx
+│  │  │  │  ├─ card.tsx
+│  │  │  │  ├─ table.tsx
+│  │  │  │  └─ tabs.tsx
+│  │  │  └─ Workflow.tsx
+│  │  ├─ hooks
+│  │  │  └─ useCountUp.ts
+│  │  ├─ index.css
+│  │  ├─ lib
+│  │  │  └─ utils.ts
+│  │  ├─ main.tsx
+│  │  └─ types.ts
+│  ├─ tsconfig.app.json
+│  ├─ tsconfig.json
+│  ├─ tsconfig.node.json
+│  └─ vite.config.ts
+├─ pyrightconfig.json
+├─ pytest.ini
+├─ README.md
+└─ scripts
+   ├─ check_nvidia.py
+   ├─ check_zetaris.py
+   ├─ check_zetaris_query.py
+   ├─ generate_fixtures.py
+   └─ generate_sample_response.py
+
+```
