@@ -3,8 +3,8 @@
 Demo clock: 2026-10-13T09:00+03:00 (policy.yaml: simulation_now). Usage covers the 72h before it.
 Scenarios:  A payment-api        -> normal, over-provisioned          -> approved
             B checkout-service   -> over-provisioned + campaign in 23h -> deferred
-            C email-worker       -> only 10 samples                    -> insufficient_data / needs_review
-            D session-store      -> peaks near request                 -> no_action / no_change
+            C email-worker       -> only 10 samples                    -> needs_review / needs_review
+            D session-store      -> peaks near request                 -> no_change / no_change
             E recommendation-api -> over-provisioned + incident match  -> deferred (incident)
 """
 import csv

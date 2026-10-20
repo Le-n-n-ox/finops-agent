@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.integrations.meterless_runner import get_runner
 from app.models.schemas import (
     AnalysisResponse,
     AnalysisSummary,
@@ -23,13 +24,18 @@ def run_analysis(
     mode: str = "demo",
 ) -> AnalysisResponse:
     """Run the complete analysis pipeline and return its dashboard response."""
-    bundle = get_inputs(data_dir)
+    runner = get_runner()
+
+    bundle = runner.run("collector", get_inputs, data_dir)
     if policy_override is not None:
         bundle.policy = policy_override
 
     now = bundle.policy.simulation_now or datetime.now(timezone.utc)
-    proposals = build_proposals(bundle, now=now)
-    results: list[WorkloadResult] = [evaluate_proposal(proposal, bundle) for proposal in proposals]
+    proposals = runner.run("optimizer", build_proposals, bundle, now=now)
+    results: list[WorkloadResult] = [
+        runner.run("critic", evaluate_proposal, proposal, bundle)
+        for proposal in proposals
+    ]
 
     summary = AnalysisSummary(
         workloads_evaluated=len(results),

@@ -9,7 +9,7 @@ Source of truth: `backend/app/models/schemas.py`. Change it only via a PR both d
 | Field name | Dev 1: `service`; Dev 2: `workload_id` | **`workload_id`** everywhere (= service name in deployments.yaml). |
 | Events file | `events.json` vs `business_events.json` | **`business_events.json`** |
 | Extra inputs | Dev 2 needs incidents + namespace | Added `incident_history.csv`, `namespace` in deployments.yaml, `policy.yaml`. |
-| Dev 1 statuses | `proposed / no_action / insufficient_data` | Kept (`ProposalStatus`). Critic maps them to `approved / deferred / rejected / needs_review / no_change` (`DecisionStatus`). |
+| Dev 1 statuses | `proposed / no_change / needs_review` | Kept (`ProposalStatus`). Critic maps them to `approved / deferred / rejected / needs_review / no_change` (`DecisionStatus`). |
 | Dev 1 model | dict-based `InputBundle` | Pydantic models (same names, validated). |
 
 ## Units
@@ -28,8 +28,8 @@ Dev 2 can start now from `data/sample_analysis_response.json` (a valid `Analysis
 |---|---|---|
 | payment-api | proposed | approved |
 | checkout-service | proposed | deferred (campaign in 23h) |
-| email-worker | insufficient_data | needs_review |
-| session-store | no_action | no_change |
+| email-worker | needs_review | needs_review |
+| session-store | no_change | no_change |
 | recommendation-api | proposed | deferred (incident INC-2041) |
 
 The demo clock is fixed in `data/policy.yaml` (`simulation_now`). Regenerate fixtures with `python scripts/generate_fixtures.py`.

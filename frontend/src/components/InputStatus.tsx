@@ -9,7 +9,7 @@ function deriveSources(d: AnalysisResponse): Source[] {
   const namespaces = new Set(d.results.map((r) => r.namespace)).size
   const samples = d.results.reduce((n, r) => n + r.proposal.metrics.sample_count, 0)
   const weak = d.results.filter(
-    (r) => r.proposal.status === 'insufficient_data' || r.checks.some((c) => c.name === 'metrics_completeness' && c.status === 'triggered'),
+    (r) => r.proposal.status === 'needs_review' || r.checks.some((c) => c.name === 'metrics_completeness' && c.status === 'triggered'),
   ).length
   const inEvent = d.results.filter((r) => r.checks.some((c) => c.name === 'event_window' && c.status === 'triggered')).length
   return [

@@ -2,7 +2,7 @@
 export type DecisionStatus = 'approved' | 'deferred' | 'rejected' | 'needs_review' | 'no_change'
 export type RiskLevel = 'low' | 'medium' | 'high'
 export type CheckStatus = 'passed' | 'triggered' | 'skipped'
-export type ProposalStatus = 'proposed' | 'no_action' | 'insufficient_data'
+export type ProposalStatus = 'proposed' | 'no_change' | 'needs_review'
 
 export interface ResourceSettings {
   cpu_request_millicores: number | null
