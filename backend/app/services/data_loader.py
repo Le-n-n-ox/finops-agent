@@ -41,7 +41,7 @@ R = TypeVar("R")
 
 def load_inputs(data_dir: str | Path = "data") -> InputBundle:
     """Load the local fixture files and return a validated InputBundle."""
-    data_dir = Path(data_dir)
+    data_dir = _resolve_data_dir(data_dir)
     issues: list[ValidationIssue] = []
 
     def read_yaml(name: str) -> Any:
@@ -105,7 +105,7 @@ def load_inputs_from_zetaris(data_dir: str | Path = "data", client: ZetarisClien
     Implement after the connection works (docs/ZETARIS_SETUP.md). Falls back to load_inputs()."""
     from app.integrations.zetaris_source import load_inputs_from_zetaris as _load
 
-    return _load(data_dir, client)
+    return _load(_resolve_data_dir(data_dir), client)
 
 
 def get_inputs(data_dir: str | Path = "data") -> InputBundle:
@@ -161,3 +161,13 @@ def _parse_records(records: Any, model: type[M], source: str,
 def _read_csv(path: Path) -> list[dict[str, str]]:
     with path.open(encoding="utf-8-sig", newline="") as file:
         return list(csv.DictReader(file))
+
+
+def _resolve_data_dir(data_dir: str | Path) -> Path:
+    """Resolve the default fixture path from either the repo root or backend/ cwd."""
+    path = Path(data_dir)
+    if not path.is_absolute() and not path.exists():
+        repository_relative = Path(__file__).resolve().parents[3] / path
+        if repository_relative.exists():
+            return repository_relative
+    return path
