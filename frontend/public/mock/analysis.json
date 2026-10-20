@@ -1367,5 +1367,14 @@
   ],
   "warnings": [
     "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
+  ],
+  "input_issues": [
+    {
+      "severity": "warning",
+      "code": "INSUFFICIENT_SAMPLES",
+      "message": "email-worker has 10 usage samples (minimum 24).",
+      "source": "usage_history.csv",
+      "workload_id": "email-worker"
+    }
   ]
 }
