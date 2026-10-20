@@ -135,12 +135,23 @@ class OptimizerPolicy(BaseModel):
 
 
 class CriticPolicy(BaseModel):
-    """Developer 2 owns these."""
+    """Developer 2 owns these. Every field added after v1 defaults to the previous behaviour."""
+    version: str = "demo-1"                 # recorded in every decision snapshot (audit)
     risk_window_hours: int = 48
     stale_after_hours: int = 72
     cpu_floor_p99_multiplier: float = 1.10
     memory_floor_p99_multiplier: float = 1.15
     min_monthly_saving_usd: float = 1.0
+    min_samples: int = 24                    # critic re-checks evidence volume (fail safe)
+    min_cpu_request_millicores: int = 50     # absolute floors
+    min_memory_request_mib: int = 128
+    max_reduction_pct: float = 70.0          # largest allowed cut per resource
+    protected_workloads: list[str] = []      # reductions are blocked
+    excluded_workloads: list[str] = []       # never optimised -> no_change
+    event_freeze_hours_after: int = 0        # keep deferring N hours after a high-impact event ends
+    change_window_days: list[int] = []       # permitted weekdays (0=Mon..6=Sun); empty = any day
+    change_window_start_hour: int = 0        # permitted hours [start, end) in the analysis clock's timezone
+    change_window_end_hour: int = 24
 
 
 class Policy(BaseModel):

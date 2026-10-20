@@ -1,21 +1,35 @@
-"""Deterministic proposal safety checks with optional LLM-written explanations."""
+"""Developer 2 — Context Critic (deterministic rules; no LLM ever decides).
+
+Input : one OptimizationProposal ("recommendation") + InputBundle (events, incidents, services, policy.critic).
+Output: one WorkloadResult. Every relevant rule yields a CriticCheck "finding": `name` = rule family,
+        `code` = stable rule ID, `status` passed/triggered/skipped, `evidence` incl. `severity`.
+
+Contract status mapping (the guide's names -> shared contract values, which Dev 1 froze):
+    APPROVED -> approved | DEFERRED -> deferred | BLOCKED -> rejected | NO_CHANGE -> no_change
+    "insufficient / stale evidence" -> needs_review (fail safe: never approved)
+
+Optimizer status -> decision:  insufficient_data -> needs_review | no_action -> no_change | proposed -> rules below.
+
+Priority when several rules trigger (most conservative wins):
+    BLOCK  resource_floor BELOW_P99_FLOOR, policy_rules MIN_REQUEST_FLOOR / MAX_REDUCTION / PROTECTED_WORKLOAD
+    DEFER  event_window HIGH_IMPACT_EVENT / EVENT_FREEZE, incident_pattern PRIOR_INCIDENT_PATTERN (exact match),
+           policy_rules CHANGE_WINDOW
+    REVIEW metrics_completeness (stale / missing / too few samples) or a skipped verification
+    NONE   benefit BELOW_MIN_SAVING, policy_rules EXCLUDED_WORKLOAD
+    otherwise approved
+"""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import hashlib
+import re
+from datetime import datetime, timedelta, timezone
 
-import yaml
-
-from app.integrations.nvidia_nim import explain
 from app.models.schemas import (
-    CheckStatus,
-    CriticCheck,
-    DecisionStatus,
-    InputBundle,
-    OptimizationProposal,
-    ProposalStatus,
-    RiskLevel,
-    WorkloadResult,
+    BusinessEvent, CheckStatus, CriticCheck, DecisionStatus, IncidentRecord, InputBundle,
+    OptimizationProposal, ProposalStatus, RiskLevel, WorkloadResult,
 )
+
+INCIDENT_LOOKBACK_DAYS = 180  # not in CriticPolicy yet; promote to policy.yaml if both devs agree
 
 
 def evaluate_proposal(proposal: OptimizationProposal, bundle: InputBundle) -> WorkloadResult:
@@ -175,56 +189,272 @@ def evaluate_proposal(proposal: OptimizationProposal, bundle: InputBundle) -> Wo
         yaml_patch=_generate_yaml_patch(proposal), monthly_savings=savings,
     )
 
+_MEMORY_RE = re.compile(r"\bmemory\b|\boom")
+_CPU_RE = re.compile(r"\bcpu\b|throttl")
+_EPS = 1e-6
+T, P, S = CheckStatus.TRIGGERED, CheckStatus.PASSED, CheckStatus.SKIPPED
 
-def _build_result(
-    proposal: OptimizationProposal,
-    decision: DecisionStatus,
-    risk_level: RiskLevel,
-    default_reason: str,
-    checks: list[CriticCheck],
-    yaml_patch: str | None = None,
-    monthly_savings: float = 0.0,
-) -> WorkloadResult:
-    """Build the final result; NIM may phrase checks but cannot change decisions."""
-    nim_reason = explain(decision=decision.value, checks=[check.model_dump() for check in checks])
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _hours(delta: timedelta) -> float:
+    return delta.total_seconds() / 3600
+
+
+def _check(name: str, code: str, status: CheckStatus, message: str, sev: str = "info", **evidence) -> CriticCheck:
+    evidence["severity"] = sev if status is not P else "info"
+    return CriticCheck(name=name, code=code, status=status, message=message, evidence=evidence)
+
+
+def event_id(e: BusinessEvent) -> str:
+    raw = f"{e.name}|{e.start_at.isoformat()}|{e.end_at.isoformat()}"
+    return "EVT-" + hashlib.sha1(raw.encode()).hexdigest()[:8].upper()
+
+
+def _reduction_pct(cur: int | None, new: int | None) -> float | None:
+    return (cur - new) / cur * 100 if cur and new is not None else None
+
+
+# --------------------------------------------------------------------------- evidence quality
+def check_metrics(proposal: OptimizationProposal, bundle: InputBundle, now: datetime) -> CriticCheck:
+    m, pol = proposal.metrics, bundle.policy.critic
+    if m.last_observed_at is None:
+        return _check("metrics_completeness", "MISSING_TIMESTAMP", T,
+                      "No last-observed timestamp; cannot judge how fresh the evidence is", "review", sample_count=m.sample_count)
+    age = _hours(now - _aware(m.last_observed_at))
+    if age > pol.stale_after_hours:
+        return _check("metrics_completeness", "STALE_METRICS", T,
+                      f"Latest sample is {age:.0f}h old (limit {pol.stale_after_hours}h)", "review",
+                      last_observed_at=m.last_observed_at.isoformat(), age_hours=round(age, 1), limit_hours=pol.stale_after_hours)
+    if m.sample_count < pol.min_samples:
+        return _check("metrics_completeness", "INSUFFICIENT_SAMPLES", T,
+                      f"{m.sample_count} < {pol.min_samples} samples", "review", sample_count=m.sample_count)
+    return _check("metrics_completeness", "OK", P,
+                  f"{m.sample_count} samples over {m.span_hours:.0f}h; latest {max(age, 0):.0f}h ago",
+                  sample_count=m.sample_count, span_hours=m.span_hours)
+
+
+# --------------------------------------------------------------------------- events
+def _relevant_events(proposal: OptimizationProposal, bundle: InputBundle, now: datetime) -> list[BusinessEvent]:
+    pol = bundle.policy.critic
+    window_end = now + timedelta(hours=pol.risk_window_hours)
+    freeze = timedelta(hours=pol.event_freeze_hours_after)
+    found = [e for e in bundle.events
+             if proposal.workload_id in e.services and _aware(e.end_at) + freeze > now and _aware(e.start_at) <= window_end]
+    return sorted(found, key=lambda e: _aware(e.start_at))
+
+
+def check_events(proposal: OptimizationProposal, bundle: InputBundle, now: datetime) -> CriticCheck:
+    pol = bundle.policy.critic
+    relevant = _relevant_events(proposal, bundle, now)
+    high = [e for e in relevant if e.risk.lower() == "high" or e.expected_traffic.lower() == "high"]
+    if high:
+        e = high[0]
+        until = _hours(_aware(e.start_at) - now)
+        ev = dict(event=e.name, event_id=event_id(e), start_at=e.start_at.isoformat(), end_at=e.end_at.isoformat(),
+                  expected_traffic=e.expected_traffic, risk=e.risk, hours_until_start=round(until, 1))
+        if _aware(e.end_at) <= now:  # over, but inside the post-event freeze
+            return _check("event_window", "EVENT_FREEZE", T,
+                          f"{e.name} ended {_hours(now - _aware(e.end_at)):.0f}h ago; change freeze runs "
+                          f"{pol.event_freeze_hours_after}h after high-impact events", "defer", **ev)
+        when = f"starts in {round(until)}h" if until > 0 else f"is in progress (ends in {round(_hours(_aware(e.end_at) - now))}h)"
+        return _check("event_window", "HIGH_IMPACT_EVENT", T, f"{e.name} {when}", "defer", **ev)
+    if relevant:
+        return _check("event_window", "LOW_IMPACT_EVENT", P,
+                      f"Event(s) in the {pol.risk_window_hours}h window are not high impact: " + ", ".join(e.name for e in relevant),
+                      events=[e.name for e in relevant], event_ids=[event_id(e) for e in relevant])
+    return _check("event_window", "NO_EVENT", P, f"No event in {pol.risk_window_hours}h window")
+
+
+# --------------------------------------------------------------------------- incidents
+def _incident_relevant(incident: IncidentRecord, proposal: OptimizationProposal) -> bool:
+    """An incident matters only if this proposal reduces the resource the incident was about."""
+    cur, new = proposal.current, proposal.proposed
+    text = f"{incident.pattern} {incident.summary}".lower()
+    reduces_mem = (new is not None and new.memory_request_mib is not None and cur.memory_request_mib is not None
+                   and new.memory_request_mib < cur.memory_request_mib)
+    reduces_cpu = (new is not None and new.cpu_request_millicores is not None and cur.cpu_request_millicores is not None
+                   and new.cpu_request_millicores < cur.cpu_request_millicores)
+    mem_hit, cpu_hit = bool(_MEMORY_RE.search(text)), bool(_CPU_RE.search(text))
+    if not mem_hit and not cpu_hit:
+        return reduces_mem or reduces_cpu
+    return (mem_hit and reduces_mem) or (cpu_hit and reduces_cpu)
+
+
+def _incident_evidence(i: IncidentRecord, now: datetime, match: str) -> dict:
+    return dict(incident_id=i.incident_id, service=i.service, occurred_at=i.occurred_at.isoformat(), pattern=i.pattern,
+                summary=i.summary, days_ago=round(_hours(now - _aware(i.occurred_at)) / 24), match=match)
+
+
+def check_incidents(proposal: OptimizationProposal, bundle: InputBundle, now: datetime) -> list[CriticCheck]:
+    """Exact match (same workload) can defer. Indirect match (same namespace, other workload) is advisory only."""
+    cutoff = now - timedelta(days=INCIDENT_LOOKBACK_DAYS)
+    ns = {s.name: s.namespace for s in bundle.services}
+    recent = [i for i in bundle.incidents if cutoff <= _aware(i.occurred_at) <= now and _incident_relevant(i, proposal)]
+    key = lambda i: _aware(i.occurred_at)  # noqa: E731
+    exact = sorted((i for i in recent if i.service == proposal.workload_id), key=key, reverse=True)
+    indirect = sorted((i for i in recent if i.service != proposal.workload_id and ns.get(i.service) == proposal.namespace),
+                      key=key, reverse=True)
+    out: list[CriticCheck] = []
+    if exact:
+        i = exact[0]
+        out.append(_check("incident_pattern", "PRIOR_INCIDENT_PATTERN", T,
+                          f"{i.incident_id} ({_aware(i.occurred_at):%Y-%m-%d}) matches: {i.pattern}", "defer",
+                          **_incident_evidence(i, now, "exact")))
+    if indirect:
+        i = indirect[0]
+        out.append(_check("incident_pattern", "INDIRECT_INCIDENT_MATCH", P,
+                          f"Advisory: {i.incident_id} on {i.service} (same namespace) matches: {i.pattern}",
+                          **_incident_evidence(i, now, "indirect")))
+    if not out:
+        out.append(_check("incident_pattern", "NO_RELEVANT_INCIDENT", P,
+                          f"No related incident in the last {INCIDENT_LOOKBACK_DAYS} days"))
+    return out
+
+
+# --------------------------------------------------------------------------- headroom + policy rules
+def check_floor(proposal: OptimizationProposal, bundle: InputBundle) -> CriticCheck:
+    """Headroom: a proposed request must stay above p99 x multiplier."""
+    p, m, pol = proposal.proposed, proposal.metrics, bundle.policy.critic
+    if p is None:
+        return _check("resource_floor", "MISSING_PROPOSAL", S, "Proposal has no proposed requests to verify")
+    if m.cpu_p99 is None or m.memory_p99 is None:
+        return _check("resource_floor", "NO_P99", S, "p99 usage missing; cannot verify headroom")
+    cpu_floor, mem_floor = m.cpu_p99 * pol.cpu_floor_p99_multiplier, m.memory_p99 * pol.memory_floor_p99_multiplier
+    breaches: list[str] = []
+    if p.cpu_request_millicores is not None and p.cpu_request_millicores < cpu_floor - _EPS:
+        breaches.append(f"CPU {p.cpu_request_millicores} m < floor {cpu_floor:.0f} m "
+                        f"({pol.cpu_floor_p99_multiplier:g} × p99 {m.cpu_p99:.0f} m)")
+    if p.memory_request_mib is not None and p.memory_request_mib < mem_floor - _EPS:
+        breaches.append(f"memory {p.memory_request_mib} MiB < floor {mem_floor:.0f} MiB "
+                        f"({pol.memory_floor_p99_multiplier:g} × p99 {m.memory_p99:.0f} MiB)")
+    ev = dict(cpu_floor_m=round(cpu_floor, 1), memory_floor_mib=round(mem_floor, 1), cpu_p99=m.cpu_p99, memory_p99=m.memory_p99,
+              proposed_cpu_m=p.cpu_request_millicores, proposed_memory_mib=p.memory_request_mib)
+    if breaches:
+        return _check("resource_floor", "BELOW_P99_FLOOR", T,
+                      "Proposed request is below the safety floor: " + "; ".join(breaches), "block", **ev)
+    return _check("resource_floor", "HEADROOM_OK", P,
+                  f"Proposed CPU {p.cpu_request_millicores} m ≥ {cpu_floor:.0f} m and memory {p.memory_request_mib} MiB ≥ {mem_floor:.0f} MiB", **ev)
+
+
+def check_policy_rules(proposal: OptimizationProposal, bundle: InputBundle, now: datetime) -> list[CriticCheck]:
+    pol, cur, new = bundle.policy.critic, proposal.current, proposal.proposed
+    out: list[CriticCheck] = []
+    if new is None:
+        return out
+    cut_cpu = _reduction_pct(cur.cpu_request_millicores, new.cpu_request_millicores)
+    cut_mem = _reduction_pct(cur.memory_request_mib, new.memory_request_mib)
+    reduces = any(c is not None and c > 0 for c in (cut_cpu, cut_mem))
+
+    if pol.protected_workloads:
+        if proposal.workload_id in pol.protected_workloads and reduces:
+            out.append(_check("policy_rules", "PROTECTED_WORKLOAD", T,
+                              "Protected workload: request reductions are not allowed by policy", "block"))
+        else:
+            out.append(_check("policy_rules", "NOT_PROTECTED", P, "Workload is not protected (or nothing is reduced)"))
+
+    bad = []
+    if new.cpu_request_millicores is not None and new.cpu_request_millicores < pol.min_cpu_request_millicores:
+        bad.append(f"CPU {new.cpu_request_millicores} m < minimum {pol.min_cpu_request_millicores} m")
+    if new.memory_request_mib is not None and new.memory_request_mib < pol.min_memory_request_mib:
+        bad.append(f"memory {new.memory_request_mib} MiB < minimum {pol.min_memory_request_mib} MiB")
+    out.append(_check("policy_rules", "MIN_REQUEST_FLOOR", T, "Below the policy minimum request: " + "; ".join(bad), "block")
+               if bad else _check("policy_rules", "MIN_REQUEST_FLOOR", P, "Proposed requests meet the policy minimums"))
+
+    over = []
+    if cut_cpu is not None and cut_cpu > pol.max_reduction_pct + _EPS:
+        over.append(f"CPU cut {cut_cpu:.0f}%")
+    if cut_mem is not None and cut_mem > pol.max_reduction_pct + _EPS:
+        over.append(f"memory cut {cut_mem:.0f}%")
+    out.append(_check("policy_rules", "MAX_REDUCTION", T, f"{' and '.join(over)} exceeds the {pol.max_reduction_pct:g}% maximum reduction",
+                      "block", cpu_cut_pct=cut_cpu, memory_cut_pct=cut_mem)
+               if over else _check("policy_rules", "MAX_REDUCTION", P,
+                                   f"Reductions within the {pol.max_reduction_pct:g}% maximum",
+                                   cpu_cut_pct=cut_cpu, memory_cut_pct=cut_mem))
+
+    restricted = bool(pol.change_window_days) or (pol.change_window_start_hour, pol.change_window_end_hour) != (0, 24)
+    if restricted:
+        day_ok = not pol.change_window_days or now.weekday() in pol.change_window_days
+        hour_ok = pol.change_window_start_hour <= now.hour < pol.change_window_end_hour
+        out.append(_check("policy_rules", "CHANGE_WINDOW", T, "Outside the permitted change window", "defer",
+                          weekday=now.weekday(), hour=now.hour, allowed_days=pol.change_window_days,
+                          allowed_hours=[pol.change_window_start_hour, pol.change_window_end_hour])
+                   if not (day_ok and hour_ok) else _check("policy_rules", "CHANGE_WINDOW", P, "Inside the permitted change window"))
+    return out
+
+
+def check_benefit(proposal: OptimizationProposal, bundle: InputBundle) -> CriticCheck:
+    saving, minimum = proposal.estimated_monthly_saving_usd, bundle.policy.critic.min_monthly_saving_usd
+    if saving < minimum:
+        return _check("benefit", "BELOW_MIN_SAVING", T, f"Estimated saving ${saving:.2f}/mo is below the ${minimum:.2f} minimum",
+                      "none", saving_usd=saving, minimum_usd=minimum)
+    return _check("benefit", "OK", P, f"Estimated saving ${saving:.2f}/mo (illustrative)", saving_usd=saving)
+
+
+# --------------------------------------------------------------------------- decision
+_BLOCK_CODES = {"BELOW_P99_FLOOR", "MIN_REQUEST_FLOOR", "MAX_REDUCTION", "PROTECTED_WORKLOAD"}
+
+
+def _decide(checks: list[CriticCheck]) -> tuple[DecisionStatus, RiskLevel, str]:
+    def first(pred):
+        return next((c for c in checks if pred(c)), None)
+
+    trig = lambda c: c.status is T  # noqa: E731
+    if c := first(lambda c: trig(c) and c.code in _BLOCK_CODES):
+        return DecisionStatus.REJECTED, RiskLevel.HIGH, f"Rejected: {c.message}. Keeping the current request."
+    if c := first(lambda c: trig(c) and c.name == "event_window"):
+        lead = "change freeze" if c.code == "EVENT_FREEZE" else "high-impact event"
+        return DecisionStatus.DEFERRED, RiskLevel.HIGH, f"Deferred: {lead} — {c.message}. Revisit after it ends."
+    if c := first(lambda c: trig(c) and c.name == "incident_pattern"):
+        return (DecisionStatus.DEFERRED, RiskLevel.HIGH,
+                f"Deferred: {c.message}. A similar change caused an incident; needs owner review.")
+    if c := first(lambda c: trig(c) and c.code == "CHANGE_WINDOW"):
+        return DecisionStatus.DEFERRED, RiskLevel.MEDIUM, f"Deferred: {c.message}. Retry inside the window."
+    if c := first(lambda c: trig(c) and c.name == "metrics_completeness"):
+        return DecisionStatus.NEEDS_REVIEW, RiskLevel.MEDIUM, f"Needs review: {c.message}."
+    if c := first(lambda c: c.status is S):
+        return DecisionStatus.NEEDS_REVIEW, RiskLevel.MEDIUM, f"Needs review: {c.message}."
+    if c := first(lambda c: trig(c) and c.name == "benefit"):
+        return DecisionStatus.NO_CHANGE, RiskLevel.LOW, f"No change: {c.message}."
+    return DecisionStatus.APPROVED, RiskLevel.LOW, "All safety checks passed; patch is review-only."
+
+
+def _result(proposal: OptimizationProposal, decision: DecisionStatus, risk: RiskLevel, reason: str,
+            checks: list[CriticCheck]) -> WorkloadResult:
     return WorkloadResult(
-        workload_id=proposal.workload_id,
-        namespace=proposal.namespace,
-        decision=decision,
-        risk_level=risk_level,
-        reason=nim_reason or default_reason,
-        checks=checks,
-        proposal=proposal,
-        monthly_savings_estimate_usd=monthly_savings if decision == DecisionStatus.APPROVED else 0.0,
-        yaml_patch=yaml_patch,
+        workload_id=proposal.workload_id, namespace=proposal.namespace, decision=decision, risk_level=risk,
+        reason=reason, checks=checks, proposal=proposal,
+        monthly_savings_estimate_usd=proposal.estimated_monthly_saving_usd if decision is DecisionStatus.APPROVED else 0.0,
+        yaml_patch=None,  # added by report_service for approved + validated results only
     )
 
 
-def _generate_yaml_patch(proposal: OptimizationProposal) -> str | None:
-    """Render a review-only partial Deployment patch using safe YAML serialization."""
-    proposed = proposal.proposed
-    if proposed is None:
-        return None
-    cpu = proposed.cpu_request_millicores
-    memory = proposed.memory_request_mib
-    if cpu is None or memory is None:
-        return None
-    patch = {
-        "spec": {
-            "template": {
-                "spec": {
-                    "containers": [{
-                        "name": proposal.workload_id,
-                        "resources": {"requests": {"cpu": f"{cpu}m", "memory": f"{memory}Mi"}},
-                    }],
-                },
-            },
-        },
-    }
-    return yaml.safe_dump(patch, sort_keys=False).rstrip()
+def evaluate(proposal: OptimizationProposal, bundle: InputBundle, now: datetime | None = None) -> WorkloadResult:
+    """Judge one proposal. `now` is injected so tests/demos never depend on the wall clock."""
+    now = _aware(now or bundle.policy.simulation_now or datetime.now(timezone.utc))
+    pol = bundle.policy.critic
+    reasons = " ".join(proposal.reasons).strip()
 
+    if proposal.workload_id in pol.excluded_workloads:
+        chk = _check("policy_rules", "EXCLUDED_WORKLOAD", T, "Workload is excluded from optimisation by policy", "none")
+        return _result(proposal, DecisionStatus.NO_CHANGE, RiskLevel.LOW, "No change: workload is excluded from optimisation by policy.", [chk])
 
-def _as_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+    if proposal.status is ProposalStatus.INSUFFICIENT_DATA:
+        m, opt = proposal.metrics, bundle.policy.optimizer
+        code = "INSUFFICIENT_SAMPLES" if m.sample_count < opt.min_samples else "INSUFFICIENT_HISTORY"
+        message = (f"{m.sample_count} < {opt.min_samples} samples" if code == "INSUFFICIENT_SAMPLES"
+                   else f"{m.span_hours:.0f}h < {opt.min_span_hours:g}h of history")
+        chk = _check("metrics_completeness", code, T, message, "review", sample_count=m.sample_count, span_hours=m.span_hours)
+        return _result(proposal, DecisionStatus.NEEDS_REVIEW, RiskLevel.MEDIUM, f"Needs review: {reasons or message}", [chk])
+
+    if proposal.status is ProposalStatus.NO_ACTION:
+        chk = _check("benefit", "BELOW_THRESHOLD", T, reasons or "No safe reduction identified", "none")
+        return _result(proposal, DecisionStatus.NO_CHANGE, RiskLevel.LOW, f"No change: {reasons or 'no safe reduction identified'}", [chk])
+
+    checks = [check_metrics(proposal, bundle, now), check_events(proposal, bundle, now), *check_incidents(proposal, bundle, now),
+              check_floor(proposal, bundle), *check_policy_rules(proposal, bundle, now), check_benefit(proposal, bundle)]
+    decision, risk, reason = _decide(checks)
+    return _result(proposal, decision, risk, reason, checks)
