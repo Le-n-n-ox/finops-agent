@@ -433,5 +433,6 @@
   ],
   "warnings": [
     "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
-  ]
+  ],
+  "input_issues": []
 }
