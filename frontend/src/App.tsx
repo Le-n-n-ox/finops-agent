@@ -140,6 +140,20 @@ export default function App() {
           <Workflow data={state.data} />
           <InputStatus data={state.data} />
           <SummaryCards summary={state.data.summary} active={filter} onFilter={setFilter} />
+          {!!state.data.top_opportunities?.length && <section className="rounded-xl border bg-card p-4" aria-label="Top ranked opportunities">
+            <div className="mb-3 flex items-baseline justify-between gap-3">
+              <h2 className="font-semibold">Top opportunities</h2>
+              <span className="text-xs text-muted-foreground">Ranked from approved recommendations · top {state.data.top_n_findings ?? 5}</span>
+            </div>
+            <ol className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+              {state.data.top_opportunities.map((item, index) => <li key={item.workload_id} className="rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">#{index + 1} · priority {item.priority_score.toFixed(2)}</p>
+                <p className="font-medium">{item.workload_id}</p>
+                <p className="text-sm">${item.monthly_savings_usd.toFixed(2)} / month</p>
+                <p className="text-xs text-muted-foreground">{item.confidence_score.toFixed(0)}% confidence · {item.risk_level} risk</p>
+              </li>)}
+            </ol>
+          </section>}
           <div className="grid gap-6 md:grid-cols-2">
             <DecisionDonut summary={state.data.summary} active={filter} onFilter={setFilter} />
             <SavingsChart results={state.data.results} />

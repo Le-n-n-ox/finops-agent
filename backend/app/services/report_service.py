@@ -293,5 +293,6 @@ def with_patch(result: WorkloadResult, spec: WorkloadSpec | None = None) -> Work
                         message=f"Patch could not be validated: {why}", evidence={"severity": "review"})
     return result.model_copy(update={"decision": DecisionStatus.NEEDS_REVIEW, "risk_level": RiskLevel.MEDIUM,
                                      "monthly_savings_estimate_usd": 0.0, "yaml_patch": None, "checks": [*result.checks, check],
+                                     "proposal": result.proposal.model_copy(update={"priority_score": 0.0}),
                                      "reason": f"Needs review: patch could not be validated ({why})."})
 

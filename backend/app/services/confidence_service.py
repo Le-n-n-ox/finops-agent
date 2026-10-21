@@ -24,6 +24,7 @@ def calculate_recommendation_confidence(
     max_age_hours: float = 24,
     cpu_values: list[float] | None = None,
     memory_values: list[float] | None = None,
+    risk_context: bool = False,
 ) -> ConfidenceAssessment:
     """Score evidence transparently using data validity, freshness, coverage and stability."""
     values = [*(cpu_values or []), *(memory_values or [])]
@@ -53,13 +54,16 @@ def calculate_recommendation_confidence(
         ConfidenceFactor(name="validity", score=0.0 if quality.errors or quality.missing_fields else 100.0,
                          weight=0.20, explanation="No validation errors or missing required fields." if not quality.errors and not quality.missing_fields else "Validation errors or missing fields reduce confidence."),
         ConfidenceFactor(name="sample_sufficiency", score=min(100.0, 100.0 * summary.sample_count / max(min_samples, 1)),
-                         weight=0.25, explanation=f"{summary.sample_count} observations against a minimum of {min_samples}."),
-        ConfidenceFactor(name="freshness", score=freshness_score, weight=0.20,
+                         weight=0.20, explanation=f"{summary.sample_count} observations against a minimum of {min_samples}."),
+        ConfidenceFactor(name="freshness", score=freshness_score, weight=0.15,
                          explanation=f"Latest observation age is evaluated against a {max_age_hours:g} hour limit."),
-        ConfidenceFactor(name="stability", score=stability_score, weight=0.20,
+        ConfidenceFactor(name="stability", score=stability_score, weight=0.15,
                          explanation="Score decreases with CPU or memory coefficient of variation."),
-        ConfidenceFactor(name="anomalies", score=anomaly_score, weight=0.15,
+        ConfidenceFactor(name="anomalies", score=anomaly_score, weight=0.10,
                          explanation=f"{len(anomalies)} baseline anomaly/anomalies were detected."),
+        ConfidenceFactor(name="risk_overlap", score=45.0 if risk_context else 100.0, weight=0.20,
+                         explanation="Recent incident or overlapping event context reduces confidence." if risk_context
+                         else "No incident or event overlap affects this recommendation."),
     ]
     score = round(sum(factor.score * factor.weight for factor in factors), 1)
     if not quality.usable_for_recommendation:
@@ -69,7 +73,7 @@ def calculate_recommendation_confidence(
         score=score,
         label=label,
         factors=factors,
-        explanation=f"{label.title()} confidence ({score:.1f}/100) from five weighted, deterministic evidence factors.",
+        explanation=f"{label.title()} confidence ({score:.1f}/100) from six weighted, deterministic evidence factors.",
     )
 
 
@@ -78,14 +82,15 @@ def score_priority(
     value_score: float,
     confidence_score: float,
 ) -> tuple[float, PriorityBreakdown]:
-    """Combine opportunity value and confidence, then subtract explicit risk penalties."""
+    """Rank savings by evidence confidence and explicit operational risk."""
     penalty = min(100.0, sum(20.0 if item.severity == "high" else 10.0 for item in recommendation.anomalies)
-                  + sum(20.0 if item.severity.lower() == "high" else 10.0 for item in recommendation.incident_evidence))
-    score = round(max(0.0, min(100.0, value_score * 0.4 + confidence_score * 0.6 - penalty)), 1)
+                  + sum(20.0 if item.severity.lower() == "high" else 10.0 for item in recommendation.incident_evidence)
+                  + sum(20.0 if item.severity.value == "high" else 10.0 for item in recommendation.findings))
+    score = round(max(0.0, value_score * confidence_score / 100 / (1 + penalty / 100)), 2)
     breakdown = PriorityBreakdown(
         value_score=round(value_score, 1),
         confidence_score=round(confidence_score, 1),
         risk_penalty=round(penalty, 1),
-        explanation="Priority = 40% opportunity value + 60% confidence − anomaly/incident risk penalty.",
+        explanation="Priority = monthly savings × confidence / 100 ÷ (1 + risk penalty / 100).",
     )
     return score, breakdown

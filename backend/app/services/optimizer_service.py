@@ -1,10 +1,11 @@
 """Deterministic resource optimizer. Requests only; never touch limits."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.models.schemas import (
     AnomalyConfig,
+    BusinessEvent,
     CostModel,
     DataQualityResult,
     IncidentEvidence,
@@ -15,6 +16,8 @@ from app.models.schemas import (
     OptimizerPolicy,
     ProposalStatus,
     ResourceSettings,
+    ResourceFinding,
+    RiskLevel,
     SavingsEstimate,
     UsageMetrics,
     UsageAnomaly,
@@ -55,6 +58,7 @@ def _analyze_workload_core(
     policy: OptimizerPolicy | None = None,
     now: datetime | None = None,
     cost_model: CostModel | None = None,
+    events: list[BusinessEvent] | None = None,
 ) -> OptimizationProposal:
     """Analyze one workload and return its proposal or a reason for no change."""
     effective_policy = policy if policy is not None else OptimizerPolicy()
@@ -155,12 +159,27 @@ def _analyze_workload_core(
         last_observed_at=times[-1],
     )
 
+    criticality_factor = effective_policy.criticality_headroom.get(workload.criticality.lower(), 1.0)
+    event_multiplier = max((e.expected_load_multiplier for e in (events or [])
+                            if workload.name in e.services
+                            and _as_utc(e.end_at) >= _as_utc(now)
+                            and _as_utc(e.start_at) <= _as_utc(now) + timedelta(hours=effective_policy.event_projection_hours)),
+                           default=1.0)
+    projected_events = [e.name for e in (events or []) if workload.name in e.services
+                        and _as_utc(e.end_at) >= _as_utc(now)
+                        and _as_utc(e.start_at) <= _as_utc(now) + timedelta(hours=effective_policy.event_projection_hours)]
+    projection_warnings = ([f"Sizing includes up to {event_multiplier:.2g}× expected demand for: {', '.join(projected_events)}."]
+                           if event_multiplier > 1 else [])
     cpu_candidate = round_up(
-        max(cpu_p95 * effective_policy.cpu_p95_multiplier, cpu_p99 * effective_policy.cpu_p99_multiplier),
+        max(cpu_p95 * effective_policy.cpu_p95_multiplier,
+            cpu_p99 * effective_policy.cpu_p99_multiplier,
+            cpu_p99 * event_multiplier * effective_policy.cpu_p99_multiplier) * criticality_factor,
         effective_policy.cpu_round_millicores,
     )
     mem_candidate = round_up(
-        max(mem_p95 * effective_policy.memory_p95_multiplier, mem_p99 * effective_policy.memory_p99_multiplier),
+        max(mem_p95 * effective_policy.memory_p95_multiplier,
+            mem_p99 * effective_policy.memory_p99_multiplier,
+            mem_p99 * event_multiplier * effective_policy.memory_p99_multiplier) * criticality_factor,
         effective_policy.memory_round_mib,
     )
     cpu_current = workload.cpu_request_millicores or 0
@@ -178,7 +197,7 @@ def _analyze_workload_core(
         and mem_candidate <= mem_current * minimum_remaining_ratio
     )
     if not cpu_is_reduced and not mem_is_reduced:
-        warnings: list[str] = []
+        warnings = list(projection_warnings)
         if cpu_p99 > cpu_current or mem_p99 > mem_current:
             warnings.append("Observed P99 usage exceeds a current request; requests will not be raised.")
         return OptimizationProposal(
@@ -199,7 +218,7 @@ def _analyze_workload_core(
         cpu_request_millicores=proposed_cpu,
         memory_request_mib=proposed_mem,
     )
-    warnings: list[str] = []
+    warnings = list(projection_warnings)
     if cpu_p99 > cpu_current or mem_p99 > mem_current:
         warnings.append("Observed P99 usage exceeds a current request; that resource will not be reduced.")
     savings = _estimate_savings(workload, proposed, cost_model)
@@ -234,6 +253,7 @@ def build_proposals(bundle: InputBundle, now: datetime | None = None) -> list[Op
             effective_now,
             bundle.cost_model,
             incidents=bundle.incidents,
+            events=bundle.events,
             data_issues=[issue for issue in bundle.issues
                          if issue.workload_id in (None, service.name)
                          and (issue.source in ("usage_history.csv", "incident_history.csv", "usage_history", "incident_history")
@@ -241,6 +261,85 @@ def build_proposals(bundle: InputBundle, now: datetime | None = None) -> list[Op
         )
         for service in bundle.services
     ]
+
+
+def detect_resource_findings(workload: WorkloadSpec, rows: list[UsageRow], policy: OptimizerPolicy,
+                             events: list[BusinessEvent] | None = None, now: datetime | None = None) -> list[ResourceFinding]:
+    """Report capacity risks and clearly labeled low-confidence idle signals."""
+    findings: list[ResourceFinding] = []
+    resources = (
+        ("cpu", [r.cpu_millicores for r in rows], workload.cpu_request_millicores,
+         workload.cpu_limit_millicores, "m"),
+        ("memory", [r.memory_mib for r in rows], workload.memory_request_mib,
+         workload.memory_limit_mib, "MiB"),
+    )
+    for name, values, request, limit, unit in resources:
+        if request is None:
+            findings.append(ResourceFinding(code=f"MISSING_{name.upper()}_REQUEST", category="configuration",
+                                             severity=RiskLevel.HIGH, resource=name,
+                                             message=f"{name.title()} request is not configured."))
+        if limit is None:
+            findings.append(ResourceFinding(code=f"MISSING_{name.upper()}_LIMIT", category="configuration",
+                                             severity=RiskLevel.MEDIUM, resource=name,
+                                             message=f"{name.title()} limit is not configured."))
+        if request and limit:
+            ratio = request / limit
+            if ratio < 0.10 or ratio > 0.90:
+                findings.append(ResourceFinding(code=f"UNUSUAL_{name.upper()}_REQUEST_LIMIT_RATIO",
+                    category="configuration", severity=RiskLevel.MEDIUM, resource=name,
+                    message=f"{name.title()} request is {ratio:.0%} of its limit; review the ratio.",
+                    evidence={"request": request, "limit": limit, "ratio": round(ratio, 3)}))
+        if not values:
+            continue
+        p95, p99, peak = percentile(values, 95), percentile(values, 99), max(values)
+        evidence = {"p95": round(p95, 1), "p99": round(p99, 1), "peak": round(peak, 1),
+                    "request": request, "limit": limit, "unit": unit, "sample_count": len(values)}
+        p95_multiplier, p99_multiplier, rounding = (
+            (policy.cpu_p95_multiplier, policy.cpu_p99_multiplier, policy.cpu_round_millicores)
+            if name == "cpu" else
+            (policy.memory_p95_multiplier, policy.memory_p99_multiplier, policy.memory_round_mib)
+        )
+        factor = policy.criticality_headroom.get(workload.criticality.lower(), 1.0)
+        event_multiplier = max((e.expected_load_multiplier for e in (events or [])
+                                if workload.name in e.services and (now is None or _as_utc(e.end_at) >= _as_utc(now))
+                                and (now is None or _as_utc(e.start_at) <= _as_utc(now) + timedelta(hours=policy.event_projection_hours))),
+                               default=1.0)
+        target = round_up(max(p95 * p95_multiplier, p99 * p99_multiplier,
+                              p99 * event_multiplier * p99_multiplier) * factor, rounding)
+        if request and len(values) >= policy.min_samples and target <= request * (1 - policy.min_reduction_pct / 100):
+            findings.append(ResourceFinding(code=f"OVERPROVISIONED_{name.upper()}_REQUEST", category="efficiency",
+                severity=RiskLevel.LOW, resource=name,
+                message=f"Evidence supports a {name} request near {target} {unit} versus the current {request} {unit} request, subject to safety review.",
+                evidence={**evidence, "candidate_request": target, "headroom_factor": factor,
+                          "projected_event_multiplier": event_multiplier}))
+        if request and p99 >= request * 0.90:
+            findings.append(ResourceFinding(code=f"{name.upper()}_NEAR_OR_ABOVE_REQUEST", category="capacity",
+                severity=RiskLevel.HIGH if p99 >= request else RiskLevel.MEDIUM, resource=name,
+                message=f"{name.title()} p99 is {p99:.0f} {unit} against a {request} {unit} request.", evidence=evidence))
+        if limit and peak >= limit * 0.90:
+            findings.append(ResourceFinding(code=f"{name.upper()}_NEAR_OR_ABOVE_LIMIT", category="capacity",
+                severity=RiskLevel.HIGH, resource=name,
+                message=f"{name.title()} peak is {peak:.0f} {unit} against a {limit} {unit} limit.", evidence=evidence))
+        if request and len(values) >= policy.min_samples and p95 < request * 0.05:
+            findings.append(ResourceFinding(code=f"LOW_{name.upper()}_UTILIZATION", category="efficiency",
+                severity=RiskLevel.LOW, resource=name,
+                message=f"{name.title()} p95 is below 5% of request; validate whether the allocation is idle.", evidence=evidence))
+    if workload.replicas > 0 and not rows:
+        findings.append(ResourceFinding(code="NO_USAGE_WITH_REPLICAS", category="efficiency",
+            severity=RiskLevel.MEDIUM, message="Replicas are configured but no usage samples exist; possible idle workload or missing telemetry."))
+    elif workload.replicas > 1 and len(rows) >= policy.min_samples and workload.cpu_request_millicores and workload.memory_request_mib:
+        cpu_p95 = percentile([row.cpu_millicores for row in rows], 95)
+        memory_p95 = percentile([row.memory_mib for row in rows], 95)
+        if cpu_p95 < workload.cpu_request_millicores * 0.10 and memory_p95 < workload.memory_request_mib * 0.10:
+            findings.append(ResourceFinding(code="POSSIBLE_REPLICA_OVERPROVISIONING", category="efficiency",
+                severity=RiskLevel.LOW,
+                message=f"Both CPU and memory p95 are below 10% of request with {workload.replicas} replicas; review replica count and autoscaling policy.",
+                evidence={"cpu_p95": round(cpu_p95, 1), "memory_p95": round(memory_p95, 1),
+                          "replicas": workload.replicas}))
+    if workload.autoscaler_enabled is False:
+        findings.append(ResourceFinding(code="NO_AUTOSCALER", category="configuration", severity=RiskLevel.LOW,
+            message="No autoscaler is reported for this workload."))
+    return findings
 
 
 def analyze_workload(
@@ -251,13 +350,17 @@ def analyze_workload(
     cost_model: CostModel | None = None,
     *,
     incidents: list[IncidentRecord] | None = None,
+    events: list[BusinessEvent] | None = None,
     data_issues: list | None = None,
     anomaly_config: AnomalyConfig | None = None,
 ) -> OptimizationProposal:
     """Build a conservative optimizer proposal enriched with evidence and confidence."""
     effective_policy = policy if policy is not None else OptimizerPolicy()
     now = now or datetime.now(timezone.utc)
-    proposal = _analyze_workload_core(workload, rows, effective_policy, now, cost_model)
+    cutoff = _as_utc(now) - timedelta(days=effective_policy.window_days)
+    rows = [row for row in rows if cutoff <= _as_utc(row.timestamp) <= _as_utc(now)]
+    proposal = _analyze_workload_core(workload, rows, effective_policy, now, cost_model, events)
+    proposal.findings = detect_resource_findings(workload, rows, effective_policy, events, now)
     summary = summarize_usage(rows, workload.name, effective_policy.p99_min_samples)
     relevant_issues = [issue for issue in (data_issues or [])
                        if issue.workload_id in (None, workload.name)]
@@ -291,6 +394,11 @@ def analyze_workload(
     incident_warning = incident_quality_warning(incidents or [], workload.name)
     if incident_warning:
         quality.warnings.append(incident_warning)
+    risk_overlap = bool(evidence or any(incident.service == workload.name
+                        and timedelta(0) <= _as_utc(now) - _as_utc(incident.occurred_at) <= timedelta(days=180)
+                        for incident in (incidents or [])) or any(workload.name in event.services
+                        and _as_utc(event.start_at) <= _as_utc(now) + timedelta(hours=effective_policy.event_projection_hours)
+                        and _as_utc(event.end_at) >= _as_utc(now) for event in (events or [])))
 
     # A malformed row for this workload is a hard optimizer stop; the critic still owns all
     # final review statuses and no approval/rejection is produced here.
@@ -309,6 +417,7 @@ def analyze_workload(
         max_age_hours=effective_policy.max_metric_age_hours,
         cpu_values=[row.cpu_millicores for row in rows],
         memory_values=[row.memory_mib for row in rows],
+        risk_context=risk_overlap,
     )
     savings = estimate_monthly_savings(
         proposal.current,
@@ -337,9 +446,9 @@ def analyze_workload(
         for item in evidence
     )
 
-    value_score = (min(100.0, savings.monthly_savings_usd * 5.0)
+    value_score = (savings.monthly_savings_usd
                    if savings.monthly_savings_usd is not None
-                   else min(100.0, savings.total_request_reduction_pct * 2.0))
+                   else savings.total_request_reduction_pct / 100.0)
     proposal.priority_score, proposal.priority_breakdown = score_priority(
         proposal, value_score, confidence.score,
     )
@@ -354,6 +463,7 @@ def recommend_resources(
     analysis_time: datetime | None = None,
     pricing: CostModel | None = None,
     incidents: list[IncidentRecord] | None = None,
+    events: list[BusinessEvent] | None = None,
     data_issues: list | None = None,
 ) -> OptimizationProposal:
     """Guide-name entry point; returns the shared optimizer proposal, never a critic decision."""
@@ -364,6 +474,7 @@ def recommend_resources(
         now=analysis_time,
         cost_model=pricing,
         incidents=incidents,
+        events=events,
         data_issues=data_issues,
     )
 
@@ -397,6 +508,8 @@ def estimate_monthly_savings(
     memory_rate = pricing.memory_gib_monthly_cost_usd if pricing is not None else None
     priced = cpu_rate is not None and memory_rate is not None
     monthly: float | None = None
+    monthly_low: float | None = None
+    monthly_high: float | None = None
     assumptions = [f"Replica count: {replicas}.", f"Estimate period: {days} days, scaled from a 30-day month."]
     if cpu_rate is not None and memory_rate is not None and pricing is not None:
         cpu_delta = (current_cpu - next_cpu) / 1000
@@ -404,11 +517,21 @@ def estimate_monthly_savings(
         monthly = round(max(0.0, (cpu_delta * cpu_rate
                                   + memory_delta * memory_rate)
                             * replicas * days / 30), 2)
-        assumptions.append(pricing.note)
+        uncertainty = pricing.rate_uncertainty_pct / 100
+        monthly_low = round(monthly * (1 - uncertainty), 2)
+        monthly_high = round(monthly * (1 + uncertainty), 2)
+        assumptions.extend([
+            f"Formula: ((CPU request delta in cores × ${cpu_rate:.2f}/core-month) + "
+            f"(memory request delta in GiB × ${memory_rate:.2f}/GiB-month)) × replicas × {days}/30.",
+            f"Range varies both illustrative rates by ±{pricing.rate_uncertainty_pct:g}%.",
+            pricing.note,
+        ])
     else:
         assumptions.append("Pricing is unavailable; no currency value is reported.")
     return SavingsEstimate(
         monthly_savings_usd=monthly,
+        monthly_savings_low_usd=monthly_low,
+        monthly_savings_high_usd=monthly_high,
         cpu_request_reduction_pct=round(cpu_pct, 2),
         memory_request_reduction_pct=round(memory_pct, 2),
         total_request_reduction_pct=round(total_pct, 2),
