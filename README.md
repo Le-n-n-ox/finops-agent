@@ -16,15 +16,15 @@ The Pydantic models in `backend/app/models/schemas.py` define the shared input a
 
 Optimizer parameters live in `data/policy.yaml` and can be changed without changing code:
 
-| Parameter | Demo value | Purpose |
-|---|---:|---|
-| `min_samples` | 24 | Minimum usage observations required per workload |
-| `min_span_hours` | 24 | Minimum time span covered by observations |
-| `max_metric_age_hours` | 72 | Older latest observation triggers `needs_review` |
-| CPU P95 / P99 multipliers | 1.25 / 1.10 | Headroom factors applied to CPU percentiles |
-| Memory P95 / P99 multipliers | 1.30 / 1.15 | Headroom factors applied to memory percentiles |
-| CPU / memory rounding units | 10 millicores / 64 MiB | Candidate requests round up to these increments |
-| `min_reduction_pct` | 15 | Minimum reduction required for an individual resource |
+| Parameter                    |             Demo value | Purpose                                               |
+| ---------------------------- | ---------------------: | ----------------------------------------------------- |
+| `min_samples`              |                     24 | Minimum usage observations required per workload      |
+| `min_span_hours`           |                     24 | Minimum time span covered by observations             |
+| `max_metric_age_hours`     |                     72 | Older latest observation triggers `needs_review`    |
+| CPU P95 / P99 multipliers    |            1.25 / 1.10 | Headroom factors applied to CPU percentiles           |
+| Memory P95 / P99 multipliers |            1.30 / 1.15 | Headroom factors applied to memory percentiles        |
+| CPU / memory rounding units  | 10 millicores / 64 MiB | Candidate requests round up to these increments       |
+| `min_reduction_pct`        |                     15 | Minimum reduction required for an individual resource |
 
 For each resource, the optimizer sorts the samples and calculates P95 and P99 using linear interpolation at position `(n - 1) × percentile / 100`. It calculates the candidate as:
 
@@ -113,133 +113,6 @@ data/              Demo fixtures and policy/cost configuration
 docs/              Shared contract and integration guides
 frontend/          React + TypeScript + Vite application
 scripts/            Fixture generation and integration checks
-```
-
-```
-finops-agent
-├─ .cursor
-│  └─ rules
-│     └─ finops.mdc
-├─ .dockerignore
-├─ backend
-│  ├─ app
-│  │  ├─ api
-│  │  │  ├─ routes
-│  │  │  │  ├─ analysis.py
-│  │  │  │  └─ __init__.py
-│  │  │  └─ __init__.py
-│  │  ├─ integrations
-│  │  │  ├─ meterless_runner.py
-│  │  │  ├─ nvidia_nim.py
-│  │  │  ├─ zetaris_client.py
-│  │  │  ├─ zetaris_source.py
-│  │  │  └─ __init__.py
-│  │  ├─ main.py
-│  │  ├─ models
-│  │  │  ├─ schemas.py
-│  │  │  └─ __init__.py
-│  │  ├─ services
-│  │  │  ├─ critic_service.py
-│  │  │  ├─ data_loader.py
-│  │  │  ├─ optimizer_service.py
-│  │  │  ├─ orchestrator.py
-│  │  │  ├─ report_service.py
-│  │  │  └─ __init__.py
-│  │  └─ __init__.py
-│  ├─ requirements.txt
-│  └─ tests
-│     ├─ test_data_loader.py
-│     ├─ test_optimizer.py
-│     ├─ test_optimizer_logic.py
-│     ├─ test_schemas.py
-│     ├─ test_zetaris_client.py
-│     ├─ test_zetaris_source.py
-│     └─ __init__.py
-├─ data
-│  ├─ business_events.json
-│  ├─ cost_model.json
-│  ├─ deployments.json
-│  ├─ deployments.yaml
-│  ├─ incident_history.csv
-│  ├─ policy.yaml
-│  ├─ sample_analysis_response.json
-│  └─ usage_history.csv
-├─ docker-compose.yml
-├─ Dockerfile
-├─ docs
-│  ├─ CONTRACT.md
-│  ├─ CURSOR.md
-│  ├─ INTEGRATIONS.md
-│  └─ ZETARIS_SETUP.md
-├─ e -i HEAD~5
-├─ frontend
-│  ├─ .oxlintrc.json
-│  ├─ components.json
-│  ├─ Dockerfile
-│  ├─ index.html
-│  ├─ package-lock.json
-│  ├─ package.json
-│  ├─ public
-│  │  ├─ favicon.svg
-│  │  └─ mock
-│  │     ├─ analysis.json
-│  │     ├─ scenarios
-│  │     │  ├─ event-risk.json
-│  │     │  ├─ no-change.json
-│  │     │  ├─ normal.json
-│  │     │  ├─ spike.json
-│  │     │  └─ stale.json
-│  │     └─ scenarios.json
-│  ├─ README.md
-│  ├─ scripts
-│  │  └─ make-mock-scenarios.mjs
-│  ├─ src
-│  │  ├─ api.ts
-│  │  ├─ App.tsx
-│  │  ├─ components
-│  │  │  ├─ AppToaster.tsx
-│  │  │  ├─ DecisionBadge.tsx
-│  │  │  ├─ DecisionDonut.tsx
-│  │  │  ├─ DetailPanel.tsx
-│  │  │  ├─ InputStatus.tsx
-│  │  │  ├─ ResultsTable.tsx
-│  │  │  ├─ SavingsChart.tsx
-│  │  │  ├─ ScenarioSwitcher.tsx
-│  │  │  ├─ SummaryCards.tsx
-│  │  │  ├─ ThemeToggle.tsx
-│  │  │  ├─ ui
-│  │  │  │  ├─ badge.tsx
-│  │  │  │  ├─ button.tsx
-│  │  │  │  ├─ card.tsx
-│  │  │  │  ├─ skeleton.tsx
-│  │  │  │  ├─ table.tsx
-│  │  │  │  └─ tabs.tsx
-│  │  │  ├─ UsageChart.tsx
-│  │  │  ├─ Workflow.tsx
-│  │  │  └─ YamlDiff.tsx
-│  │  ├─ hooks
-│  │  │  ├─ useCountUp.ts
-│  │  │  └─ useMediaQuery.ts
-│  │  ├─ index.css
-│  │  ├─ lib
-│  │  │  ├─ report.ts
-│  │  │  └─ utils.ts
-│  │  ├─ main.tsx
-│  │  └─ types.ts
-│  ├─ tsconfig.app.json
-│  ├─ tsconfig.json
-│  ├─ tsconfig.node.json
-│  └─ vite.config.ts
-├─ pyrightconfig.json
-├─ pytest.ini
-├─ README.md
-└─ scripts
-   ├─ check_nvidia.py
-   ├─ check_zetaris.py
-   ├─ check_zetaris_query.py
-   ├─ generate_fixtures.py
-   └─ generate_sample_response.py
-
 ```
 
 ```
@@ -381,5 +254,4 @@ finops-agent
    ├─ check_zetaris_query.py
    ├─ generate_fixtures.py
    └─ generate_sample_response.py
-
 ```
