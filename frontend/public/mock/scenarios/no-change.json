@@ -18,6 +18,13 @@
       "decision": "no_change",
       "risk_level": "low",
       "reason": "No safe reduction identified.",
+      "confidence_score": 88,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics.",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=session-store) -> no_change",
+        "validate_policy(proposal_data={}) -> no_change"
+      ],
+      "objections": [],
       "checks": [
         {
           "name": "benefit",

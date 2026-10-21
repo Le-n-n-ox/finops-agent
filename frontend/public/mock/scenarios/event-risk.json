@@ -18,6 +18,21 @@
       "decision": "deferred",
       "risk_level": "high",
       "reason": "High-impact event starts within risk window.",
+      "confidence_score": 46,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics; incident/event overlap; 1 blocking objection(s).",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=checkout-service) -> proposal for 72 samples",
+        "search_logs(workload_id=checkout-service) -> 1 record(s)",
+        "validate_policy(proposal_data={}) -> deferred"
+      ],
+      "objections": [
+        {
+          "code": "LOG_PRESSURE_IGNORED",
+          "severity": "blocking",
+          "message": "Log at 2026-10-14T09:00:00Z reports pressure: 'Memory limit reached. Container OOMKilled.' Reducing requests while the container is being OOMKilled risks an outage.",
+          "source": "search_logs"
+        }
+      ],
       "checks": [
         {
           "name": "event_window",

@@ -6,6 +6,7 @@ so a record can never be edited in place; a review is a new row. Reviewer action
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -25,7 +26,8 @@ CREATE TABLE IF NOT EXISTS decisions(
   rule_version TEXT NOT NULL DEFAULT 'rules-1', input_fingerprint TEXT);
 CREATE TABLE IF NOT EXISTS reviews(
   id INTEGER PRIMARY KEY AUTOINCREMENT, decision_id TEXT NOT NULL REFERENCES decisions(decision_id), report_id TEXT NOT NULL,
-  workload_id TEXT NOT NULL, action TEXT NOT NULL, comment TEXT, reviewer TEXT, created_at TEXT NOT NULL, outcome TEXT);
+  workload_id TEXT NOT NULL, action TEXT NOT NULL, comment TEXT, reviewer TEXT, created_at TEXT NOT NULL, outcome TEXT,
+  rejection_reasons TEXT, resource TEXT, reviewer_guidance TEXT);
 CREATE TABLE IF NOT EXISTS policies(id INTEGER PRIMARY KEY AUTOINCREMENT, version TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_dec_workload ON decisions(workload_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_rev_decision ON reviews(decision_id);
@@ -39,6 +41,17 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_reasons(raw: str | None) -> list[str]:
+    """Decode the stored JSON list of reviewer objections; tolerate legacy/blank rows."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return [str(raw)]
+    return [str(item) for item in parsed] if isinstance(parsed, list) else [str(parsed)]
+
+
 class Store:
     def __init__(self, path: str | Path = "finops_history.sqlite3") -> None:
         self._lock = threading.RLock()
@@ -49,6 +62,12 @@ class Store:
             review_columns = {row[1] for row in self._db.execute("PRAGMA table_info(reviews)")}
             if "outcome" not in review_columns:
                 self._db.execute("ALTER TABLE reviews ADD COLUMN outcome TEXT")
+            if "rejection_reasons" not in review_columns:
+                self._db.execute("ALTER TABLE reviews ADD COLUMN rejection_reasons TEXT")
+            if "resource" not in review_columns:
+                self._db.execute("ALTER TABLE reviews ADD COLUMN resource TEXT")
+            if "reviewer_guidance" not in review_columns:
+                self._db.execute("ALTER TABLE reviews ADD COLUMN reviewer_guidance TEXT")
             decision_columns = {row[1] for row in self._db.execute("PRAGMA table_info(decisions)")}
             if "rule_version" not in decision_columns:
                 self._db.execute("ALTER TABLE decisions ADD COLUMN rule_version TEXT NOT NULL DEFAULT 'rules-1'")
@@ -137,19 +156,70 @@ class Store:
 
     # ------------------------------------------------------------------ audit trail
     def record_reviewer_action(self, decision_id: str, action: ReviewAction, comment: str | None = None,
-                               reviewer: str | None = None, outcome: str | None = None) -> AuditRecord:
-        """Append a review event. Never edits the decision. Only APPROVED decisions can be accepted for implementation."""
+                               reviewer: str | None = None, outcome: str | None = None,
+                               rejection_reasons: list[str] | None = None, resource: str | None = None,
+                               reviewer_guidance: str | None = None) -> AuditRecord:
+        """Append a review event. Never edits the decision. Only APPROVED decisions can be accepted for implementation.
+
+        `rejection_reasons` is structured feedback: what a human objected to, and to which resource. It is
+        stored verbatim so the agent can be reminded of it on the next run for the same workload.
+        """
         dec = self.get_decision(decision_id, with_snapshot=False)
         if dec is None:
             raise KeyError(decision_id)
         if action is ReviewAction.ACCEPTED_FOR_IMPLEMENTATION and dec.decision is not DecisionStatus.APPROVED:
             raise ValueError(f"Only approved decisions can be accepted for implementation (this one is {dec.decision.value}).")
+        reasons_json = json.dumps(rejection_reasons, ensure_ascii=False) if rejection_reasons else None
         created = _now()
         with self._lock:
-            cur = self._db.execute("INSERT INTO reviews(decision_id,report_id,workload_id,action,comment,reviewer,created_at,outcome) VALUES (?,?,?,?,?,?,?,?)",
-                                   (decision_id, dec.report_id, dec.workload_id, action.value, comment, reviewer, created.isoformat(), outcome))
-        return AuditRecord(id=cur.lastrowid, decision_id=decision_id, report_id=dec.report_id, workload_id=dec.workload_id,
-                           action=action, comment=comment, reviewer=reviewer, created_at=created, outcome=outcome)
+            cur = self._db.execute(
+                "INSERT INTO reviews(decision_id,report_id,workload_id,action,comment,reviewer,created_at,outcome,"
+                "rejection_reasons,resource,reviewer_guidance) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (decision_id, dec.report_id, dec.workload_id, action.value, comment, reviewer, created.isoformat(),
+                 outcome, reasons_json, resource, reviewer_guidance),
+            )
+            lastrowid = cur.lastrowid
+            if lastrowid is None:
+                row = self._db.execute(
+                    "SELECT id FROM reviews WHERE decision_id=? ORDER BY id DESC LIMIT 1",
+                    (decision_id,),
+                ).fetchone()
+                if row is None or row["id"] is None:
+                    raise RuntimeError(f"Failed to retrieve inserted review id for decision_id={decision_id}")
+                lastrowid = row["id"]
+        return AuditRecord(
+            id=int(lastrowid),
+            decision_id=decision_id,
+            report_id=dec.report_id,
+            workload_id=dec.workload_id,
+            action=action,
+            comment=comment,
+            reviewer=reviewer,
+            created_at=created,
+            outcome=outcome,
+            rejection_reasons=rejection_reasons or [],
+            resource=resource,
+            reviewer_guidance=reviewer_guidance,
+        )
+
+    def get_feedback_for_workload(self, workload_id: str, limit: int = 10) -> list[AuditRecord]:
+        """Historical human feedback for one workload, newest first.
+
+        Used to inject 'Historical Lessons' into the agent's proposer prompt so a rejected reduction is not
+        proposed again without addressing the reviewer's objection.
+        """
+        rows = self._db.execute(
+            "SELECT * FROM reviews WHERE workload_id=? ORDER BY id DESC LIMIT ?",
+            (workload_id, max(1, min(limit, 100))),
+        ).fetchall()
+        records: list[AuditRecord] = []
+        for row in rows:
+            data = dict(row)
+            if isinstance(data.get("created_at"), str):
+                data["created_at"] = datetime.fromisoformat(data["created_at"])
+            data["rejection_reasons"] = _parse_reasons(data.get("rejection_reasons"))
+            records.append(AuditRecord(**data))
+        return records
 
     def audit(self, *, decision_id: str | None = None, report_id: str | None = None, limit: int = 200) -> list[AuditRecord]:
         sql, args = "SELECT * FROM reviews WHERE 1=1", []
@@ -158,7 +228,14 @@ class Store:
         if report_id:
             sql += " AND report_id=?"; args.append(report_id)
         rows = self._db.execute(sql + " ORDER BY id ASC LIMIT ?", [*args, limit]).fetchall()
-        return [AuditRecord(**{k: r[k] for k in r.keys()}) for r in rows]
+        records: list[AuditRecord] = []
+        for r in rows:
+            data = dict(r)
+            if isinstance(data.get("created_at"), str):
+                data["created_at"] = datetime.fromisoformat(data["created_at"])
+            data["rejection_reasons"] = _parse_reasons(data.get("rejection_reasons"))
+            records.append(AuditRecord(**data))
+        return records
 
     # ------------------------------------------------------------------ policy
     def save_policy(self, policy: CriticPolicy) -> CriticPolicy:

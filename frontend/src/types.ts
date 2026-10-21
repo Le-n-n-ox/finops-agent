@@ -126,12 +126,28 @@ export interface UsagePoint { t: string; cpu: number; mem: number }
 /** OPTIONAL (not yet in schemas.py): business events overlapping the decision. */
 export interface EventWindow { name: string; start_at: string; end_at: string; risk?: string }
 
+/** One red-team objection raised by the adversarial Critic phase. */
+export interface CriticObjection {
+  code: string
+  severity: 'blocking' | 'advisory' | string
+  message: string
+  source?: string | null
+}
+
 export interface WorkloadResult {
   workload_id: string
   namespace: string
   decision: DecisionStatus
   risk_level: RiskLevel
   reason: string
+  /** Evidence-based confidence from the agent's verification pass (0-100). */
+  confidence_score?: number
+  /** One-line explanation of how confidence_score was derived. */
+  confidence_basis?: string
+  /** One line per tool the agent called. */
+  evidence_trail?: string[]
+  /** Adversarial objections raised during the Proposer -> Critic -> Judge cycle. */
+  objections?: CriticObjection[]
   checks: CriticCheck[]
   proposal: OptimizationProposal
   monthly_savings_estimate_usd: number
@@ -201,4 +217,37 @@ export interface ValidationResponse {
   warning_count: number
   workloads: WorkloadDataHealth[]
   issues: ValidationIssue[]
+}
+
+// ----- reviewer workflow (backend/app/models/review.py)
+
+export type ReviewAction = 'ACCEPTED_FOR_IMPLEMENTATION' | 'REJECTED' | 'NEEDS_INVESTIGATION'
+
+export interface ReviewRequest {
+  workload_id: string
+  action: ReviewAction
+  comment?: string | null
+  reviewer?: string | null
+  outcome?: string | null
+  /** Structured objections. Replayed to the agent as "Historical Lessons" on the next run. */
+  rejection_reasons?: string[]
+  /** Which resource the objection targets, e.g. "memory". */
+  resource?: string | null
+  /** Free-form "do this instead" guidance for the agent. */
+  reviewer_guidance?: string | null
+}
+
+export interface AuditRecord {
+  id: number
+  decision_id: string
+  report_id: string
+  workload_id: string
+  action: ReviewAction
+  comment: string | null
+  reviewer: string | null
+  created_at: string
+  outcome: string | null
+  rejection_reasons: string[]
+  resource: string | null
+  reviewer_guidance: string | null
 }

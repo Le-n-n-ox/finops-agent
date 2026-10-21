@@ -18,6 +18,14 @@
       "decision": "approved",
       "risk_level": "low",
       "reason": "All safety checks passed; patch is review-only.",
+      "confidence_score": 100,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics.",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=payment-api) -> proposal for 72 samples",
+        "get_incident_history(workload_id=payment-api) -> 0 record(s)",
+        "validate_policy(proposal_data={}) -> approved"
+      ],
+      "objections": [],
       "checks": [
         {
           "name": "metrics_completeness",
@@ -436,6 +444,21 @@
       "decision": "deferred",
       "risk_level": "high",
       "reason": "High-impact event starts within risk window.",
+      "confidence_score": 46,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics; incident/event overlap; 1 blocking objection(s).",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=checkout-service) -> proposal for 72 samples",
+        "search_logs(workload_id=checkout-service) -> 1 record(s)",
+        "validate_policy(proposal_data={}) -> deferred"
+      ],
+      "objections": [
+        {
+          "code": "LOG_PRESSURE_IGNORED",
+          "severity": "blocking",
+          "message": "Log at 2026-10-14T09:00:00Z reports pressure: 'Memory limit reached. Container OOMKilled.' Reducing requests while the container is being OOMKilled risks an outage.",
+          "source": "search_logs"
+        }
+      ],
       "checks": [
         {
           "name": "event_window",
@@ -864,6 +887,21 @@
       "decision": "needs_review",
       "risk_level": "medium",
       "reason": "Only 10 samples; evidence insufficient.",
+      "confidence_score": 30,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 10/24 samples; fresh metrics; 1 blocking objection(s).",
+      "evidence_trail": [
+        "get_workload_metrics(workload_id=email-worker) -> 10 record(s)",
+        "analyze_rightsizing(workload_id=email-worker) -> needs_review",
+        "validate_policy(proposal_data={}) -> needs_review"
+      ],
+      "objections": [
+        {
+          "code": "THIN_EVIDENCE",
+          "severity": "blocking",
+          "message": "Only 10 usage samples back this recommendation, below the required 24. The sample window is too small to distinguish a trend from noise.",
+          "source": "get_workload_metrics"
+        }
+      ],
       "checks": [
         {
           "name": "metrics_completeness",
@@ -962,6 +1000,13 @@
       "decision": "no_change",
       "risk_level": "low",
       "reason": "No safe reduction identified.",
+      "confidence_score": 88,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics.",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=session-store) -> no_change",
+        "validate_policy(proposal_data={}) -> no_change"
+      ],
+      "objections": [],
       "checks": [
         {
           "name": "benefit",

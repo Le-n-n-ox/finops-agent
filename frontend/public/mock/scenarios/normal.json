@@ -18,6 +18,14 @@
       "decision": "approved",
       "risk_level": "low",
       "reason": "All safety checks passed; patch is review-only.",
+      "confidence_score": 100,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics.",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=payment-api) -> proposal for 72 samples",
+        "get_incident_history(workload_id=payment-api) -> 0 record(s)",
+        "validate_policy(proposal_data={}) -> approved"
+      ],
+      "objections": [],
       "checks": [
         {
           "name": "metrics_completeness",

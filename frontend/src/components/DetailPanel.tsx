@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CHECK_STYLE, DECISIONS, DecisionBadge, RiskText } from './DecisionBadge'
+import ReviewForm from './ReviewForm'
 import UsageChart from './UsageChart'
 import YamlDiff from './YamlDiff'
 import { downloadText } from '@/lib/report'
@@ -47,7 +48,7 @@ function UsageBar({ label, unit, request, proposed, p99 }: BarProps) {
 const delta = (cur: number | null, next: number | null | undefined) =>
   cur && next != null ? `${Math.round(((next - cur) / cur) * 100)}%` : '—'
 
-export default function DetailPanel({ result, className, onClose }: { result: WorkloadResult; className?: string; onClose?: () => void }) {
+export default function DetailPanel({ result, reportId, className, onClose }: { result: WorkloadResult; reportId?: string; className?: string; onClose?: () => void }) {
   const [copied, setCopied] = useState(false)
   const { proposal: p } = result
 
@@ -113,6 +114,35 @@ export default function DetailPanel({ result, className, onClose }: { result: Wo
               <dt className="text-muted-foreground">Limits (context)</dt><dd className="tabular-nums">{p.current.cpu_limit_millicores ?? '—'} m / {p.current.memory_limit_mib ?? '—'} MiB</dd>
             </dl>
             {p.confidence && <p className="text-sm"><span className="font-medium">Confidence:</span> {p.confidence.score}/100 ({p.confidence.label})</p>}
+            {result.confidence_score != null && (
+              <div className="space-y-1 rounded-md border p-3">
+                <p className="text-sm"><span className="font-medium">Agent confidence:</span> {result.confidence_score.toFixed(1)}/100</p>
+                {result.confidence_basis && <p className="text-xs text-muted-foreground">{result.confidence_basis}</p>}
+              </div>
+            )}
+            {!!result.objections?.length && (
+              <section className="space-y-2 rounded-md border p-3">
+                <h3 className="text-sm font-medium">Adversarial review objections</h3>
+                {result.objections.map((o) => (
+                  <p key={o.code} className="text-sm text-muted-foreground">
+                    <span className={cn('font-medium', o.severity === 'blocking' ? 'text-red-600 dark:text-red-400' : 'text-amber-700 dark:text-amber-400')}>
+                      {o.severity === 'blocking' ? 'BLOCKING' : 'ADVISORY'} · {o.code}:
+                    </span>{' '}
+                    {o.message}
+                  </p>
+                ))}
+              </section>
+            )}
+            {!!result.evidence_trail?.length && (
+              <details className="rounded-md border p-3">
+                <summary className="cursor-pointer text-sm font-medium">Evidence trail ({result.evidence_trail.length} tool calls)</summary>
+                <ol className="mt-2 space-y-1">
+                  {result.evidence_trail.map((line, i) => (
+                    <li key={i} className="break-words text-xs text-muted-foreground">{line}</li>
+                  ))}
+                </ol>
+              </details>
+            )}
             {p.priority_score != null && <p className="text-xs text-muted-foreground">Priority score {p.priority_score.toFixed(2)} (estimated savings × confidence ÷ operational risk)</p>}
             {p.savings_estimate?.pricing_available && <p className="text-xs text-muted-foreground">Illustrative monthly estimate range: ${p.savings_estimate.monthly_savings_low_usd?.toFixed(2) ?? '—'}–${p.savings_estimate.monthly_savings_high_usd?.toFixed(2) ?? '—'}. {p.savings_estimate.assumptions.join(' ')}</p>}
             {!!p.findings?.length && <section className="space-y-2 rounded-md border p-3">
@@ -127,7 +157,7 @@ export default function DetailPanel({ result, className, onClose }: { result: Wo
             </section>}
           </TabsContent>
 
-          <TabsContent value="critic">
+          <TabsContent value="critic" className="space-y-4">
             <ol className="relative space-y-4 border-l pl-5">
               <li>
                 <GitCommitVertical className="absolute -left-[9px] size-[18px] bg-card text-muted-foreground" aria-hidden />
@@ -142,12 +172,30 @@ export default function DetailPanel({ result, className, onClose }: { result: Wo
                   <p className="text-sm text-muted-foreground">{c.message}</p>
                 </li>
               ))}
+              {!!result.objections?.length && (
+                <li className="relative">
+                  <span className="absolute -left-[26px] top-1.5 size-2.5 rounded-full bg-red-500 ring-4 ring-card" aria-label="objection" />
+                  <p className="text-sm font-medium">Adversarial review <span className="text-xs font-normal text-muted-foreground">{result.objections.length} objection(s)</span></p>
+                  {result.objections.map((o) => (
+                    <p key={o.code} className="text-sm text-muted-foreground">
+                      <span className={cn('font-medium', o.severity === 'blocking' ? 'text-red-600 dark:text-red-400' : 'text-amber-700 dark:text-amber-400')}>{o.code}</span>: {o.message}
+                    </p>
+                  ))}
+                </li>
+              )}
               <li>
                 <GitCommitVertical className="absolute -left-[9px] size-[18px] bg-card text-primary" aria-hidden />
                 <p className="flex items-center gap-2 text-sm font-medium">Critic decision <DecisionBadge decision={result.decision} /></p>
                 <p className="text-sm text-muted-foreground">{result.reason}</p>
               </li>
             </ol>
+            {reportId && (
+              <ReviewForm
+                reportId={reportId}
+                workloadId={result.workload_id}
+                canAccept={result.decision === 'approved'}
+              />
+            )}
           </TabsContent>
 
           <TabsContent value="patch" className="space-y-3">
