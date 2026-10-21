@@ -78,6 +78,8 @@ def render_markdown_report(analysis: AnalysisResponse) -> str:
             (f"Confidence: {proposal.confidence.score:.1f}/100 ({proposal.confidence.label}). "
              f"Priority: {proposal.priority_score:.1f}/100."
              if proposal.confidence and proposal.priority_score is not None else "Confidence and priority were not calculated."),
+            (f"Agent confidence: {result.confidence_score:.1f}/100 — {result.confidence_basis}"
+             if result.confidence_score else "Agent confidence was not calculated."),
             "",
             "### Safety checks",
             "",
@@ -86,6 +88,13 @@ def render_markdown_report(analysis: AnalysisResponse) -> str:
             lines.extend(f"- **{check.name} [{check.code}] — {check.status.value}:** {check.message}" for check in result.checks)
         else:
             lines.append("- No critic checks were recorded.")
+        if result.objections:
+            lines.extend(["", "Adversarial review objections:"])
+            lines.extend(f"- **{objection.severity.upper()} [{objection.code}]:** {objection.message}"
+                         for objection in result.objections)
+        if result.evidence_trail:
+            lines.extend(["", "Evidence trail:"])
+            lines.extend(f"- {line}" for line in result.evidence_trail)
         if proposal.reasons:
             lines.extend(["", "Optimizer reasons:", *[f"- {reason}" for reason in proposal.reasons]])
         if proposal.warnings:

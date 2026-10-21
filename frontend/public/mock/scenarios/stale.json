@@ -18,6 +18,21 @@
       "decision": "needs_review",
       "risk_level": "medium",
       "reason": "Only 10 samples; evidence insufficient.",
+      "confidence_score": 30,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 10/24 samples; fresh metrics; 1 blocking objection(s).",
+      "evidence_trail": [
+        "get_workload_metrics(workload_id=email-worker) -> 10 record(s)",
+        "analyze_rightsizing(workload_id=email-worker) -> needs_review",
+        "validate_policy(proposal_data={}) -> needs_review"
+      ],
+      "objections": [
+        {
+          "code": "THIN_EVIDENCE",
+          "severity": "blocking",
+          "message": "Only 10 usage samples back this recommendation, below the required 24. The sample window is too small to distinguish a trend from noise.",
+          "source": "get_workload_metrics"
+        }
+      ],
       "checks": [
         {
           "name": "metrics_completeness",

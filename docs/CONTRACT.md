@@ -23,6 +23,27 @@ build_proposals(bundle, now=None) -> list[OptimizationProposal]   # one per serv
 ```
 Dev 2 can start now from `data/sample_analysis_response.json` (a valid `AnalysisResponse`).
 
+## Agent review cycle additions
+
+The agent mode adds fields to the shared contract. All are additive and defaulted, so an older payload still validates.
+
+`WorkloadResult` gained:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `confidence_score` | `float` (0–100) | Agent-level confidence. Distinct from `proposal.confidence.score`, which scores the *proposal's* factors. |
+| `confidence_basis` | `str` | One line explaining how `confidence_score` was derived. |
+| `evidence_trail` | `list[str]` | One line per tool call the agent made. |
+| `objections` | `list[CriticObjection]` | Red-team objections from the Critic phase. |
+
+`CriticObjection` is `{code, severity, message, source}`. `severity` is `"blocking"` or `"advisory"`; `code` is a stable identifier; `source` names the tool the objection is grounded in.
+
+`AgentAuditLog` gained `cycles: list[ReviewCycle]`, `confidence_score`, `evidence_trail`, and `historical_lessons`. A `ReviewCycle` is `{role, summary, steps, objections, verdict, started_at, completed_at}`, with `role` one of `"proposer"`, `"critic"`, `"judge"`.
+
+`POST /api/analyze` accepts `mode`: `"pipeline"` (default) or `"agent"`. Both return the same `AnalysisResponse` shape and, by design, the same decisions — the adversarial phase may only downgrade an approval to `needs_review`. The invariant is asserted by `backend/tests/test_agent_api.py::test_agent_and_pipeline_agree_on_decisions`.
+
+Review records gained `rejection_reasons: list[str]`, `resource: str | None`, and `reviewer_guidance: str | None`. Only rejections become "Historical Lessons" on the next agent run for that workload.
+
 ## Demo scenarios baked into `data/`
 | Service | Expected optimizer | Expected critic |
 |---|---|---|

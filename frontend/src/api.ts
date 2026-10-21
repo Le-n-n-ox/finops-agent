@@ -1,4 +1,4 @@
-import type { AnalysisResponse } from '@/types'
+import type { AnalysisResponse, AuditRecord, ReviewRequest } from '@/types'
 
 export interface LoadResult {
   data: AnalysisResponse
@@ -35,4 +35,22 @@ export async function loadScenarios(): Promise<ScenarioInfo[]> {
   } catch {
     return []
   }
+}
+
+/**
+ * Record a human review action. This is a workflow record only: accepting a decision for
+ * implementation never deploys anything. Rejections carry structured reasons, which the agent
+ * replays as "Historical Lessons" the next time it analyses the same workload.
+ */
+export async function submitReview(reportId: string, request: ReviewRequest): Promise<AuditRecord> {
+  const res = await fetch(`/api/reports/${encodeURIComponent(reportId)}/review`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(request),
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error(detail || `Review failed (${res.status})`)
+  }
+  return (await res.json()) as AuditRecord
 }

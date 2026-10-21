@@ -27,10 +27,16 @@ class AnalyzeRequest(BaseModel):
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
-def analyze(_: AnalyzeRequest | None = None, svc: Services = Depends(get_services)) -> AnalysisResponse:
-    """Triggers the deep FinOps Agent analysis and returns structured results."""
+async def analyze(req: AnalyzeRequest | None = None, svc: Services = Depends(get_services)) -> AnalysisResponse:
+    """Triggers the FinOps Agent analysis and returns structured results.
+
+    `mode` selects the reasoning path: "pipeline" (deterministic) or "agent" (Proposer -> Critic -> Judge).
+    """
     with api_errors():
-        return run_and_record(svc.store, inputs_fn=svc.inputs_fn, proposals_fn=svc.proposals_fn)
+        mode = (req.mode if req else "pipeline") or "pipeline"
+        if mode == "agent":
+            return await run_and_record(svc.store, mode="agent")
+        return await run_and_record(svc.store, inputs_fn=svc.inputs_fn, proposals_fn=svc.proposals_fn)
 
 
 @router.get("/validation", response_model=ValidationResponse)
@@ -40,9 +46,9 @@ def validation() -> ValidationResponse:
 
 
 @router.get("/report")
-def report(format: Literal["json", "markdown"] = "json") -> Response:
+async def report(format: Literal["json", "markdown"] = "json") -> Response:
     """Generate a fresh, review-only audit report as JSON or Markdown."""
-    analysis = run_analysis()
+    analysis = await run_analysis()
     if format == "markdown":
         return Response(
             content=render_markdown_report(analysis),
