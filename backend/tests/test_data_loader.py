@@ -1,6 +1,7 @@
 """Developer 1 specs for loading and validating the input fixtures."""
 from pathlib import Path
 import shutil
+import csv
 
 import pytest
 
@@ -11,7 +12,8 @@ DATA = Path(__file__).resolve().parents[2] / "data"
 
 def test_valid_fixture_loads():
     b = load_inputs(DATA)
-    assert len(b.services) == 5 and b.usage_rows and b.events and b.cost_model
+    assert len(b.services) == 10 and len(b.usage_rows) > 7000 and b.events and b.cost_model
+    assert not any(issue.code == "MISSING_METRIC" for issue in b.issues)
 
 
 def test_missing_file_gives_clear_error(tmp_path):
@@ -22,7 +24,15 @@ def test_missing_file_gives_clear_error(tmp_path):
 def test_unknown_service_is_flagged_not_dropped(tmp_path):
     target = tmp_path_copy(DATA, tmp_path)
     usage = target / "usage_history.csv"
-    usage.write_text(usage.read_text() + "2026-10-13T09:00:00+03:00,ghost-svc,10,20\n")
+    with usage.open(encoding="utf-8", newline="") as file:
+        reader = csv.DictReader(file)
+        fields = reader.fieldnames
+        rows = list(reader)
+    row = {field: "" for field in fields}
+    row.update(timestamp="2026-10-13T09:00:00+03:00", workload="ghost-svc", namespace="ghost",
+               cpu_usage_millicores="10", memory_usage_mib="20", data_quality_flag="ok")
+    with usage.open("a", encoding="utf-8", newline="") as file:
+        csv.DictWriter(file, fieldnames=fields).writerow(row)
     bundle = load_inputs(target)
     assert any(issue.code == "UNKNOWN_SERVICE" and issue.workload_id == "ghost-svc" for issue in bundle.issues)
 
@@ -31,10 +41,16 @@ def test_negative_usage_and_bad_timestamp_flagged(tmp_path):
     target = tmp_path_copy(DATA, tmp_path)
     usage = target / "usage_history.csv"
     text = usage.read_text()
-    lines = text.splitlines()
-    lines[1] = "not-a-time,payment-api,10,20"
-    lines.append("2026-10-13T09:00:00+03:00,payment-api,-1,20")
-    usage.write_text("\n".join(lines) + "\n")
+    rows = list(csv.DictReader(text.splitlines()))
+    rows[0]["timestamp"] = "not-a-time"
+    negative = dict(rows[1])
+    negative.update(timestamp="2026-10-13T09:00:00+03:00", workload="payment-api",
+                    cpu_usage_millicores="-1", data_quality_flag="ok")
+    rows.append(negative)
+    with usage.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
     bundle = load_inputs(target)
     codes = {issue.code for issue in bundle.issues}
     assert "NEGATIVE_USAGE" in codes

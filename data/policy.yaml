@@ -1,6 +1,6 @@
 # Demo policy values — heuristics, NOT production guarantees. Change here, not in code.
 # Fixed demo clock so tests/demo never age out. Remove it to use the real clock.
-simulation_now: "2026-10-13T09:00:00+03:00"
+simulation_now: "2026-09-30T23:05:00Z"
 
 optimizer:            # Developer 1
   min_samples: 24

@@ -1,13 +1,72 @@
-[
-  {
-    "name": "Major marketing campaign",
-    "start_at": "2026-10-14T08:00:00+03:00",
-    "end_at": "2026-10-14T22:00:00+03:00",
-    "services": [
-      "checkout-service"
-    ],
-    "expected_traffic": "high",
-    "risk": "high",
-    "notes": "Expected customer traffic spike"
-  }
-]
+{
+  "timezone": "UTC",
+  "events": [
+    {
+      "event_id": "EVT-001",
+      "name": "Autumn Campaign",
+      "start": "2026-09-08T08:00:00Z",
+      "end": "2026-09-08T20:00:00Z",
+      "affected_workloads": [
+        "checkout-service",
+        "payment-api",
+        "catalog-api",
+        "auth-service"
+      ],
+      "expected_load_multiplier": 2.2,
+      "freeze_optimization": true,
+      "severity": "high"
+    },
+    {
+      "event_id": "EVT-002",
+      "name": "Email Newsletter Blast",
+      "start": "2026-09-12T09:00:00Z",
+      "end": "2026-09-12T13:00:00Z",
+      "affected_workloads": [
+        "email-worker",
+        "catalog-api"
+      ],
+      "expected_load_multiplier": 3.0,
+      "freeze_optimization": false,
+      "severity": "medium"
+    },
+    {
+      "event_id": "EVT-003",
+      "name": "Recommendation Model Refresh",
+      "start": "2026-09-16T01:00:00Z",
+      "end": "2026-09-16T05:00:00Z",
+      "affected_workloads": [
+        "recommendation-api",
+        "analytics-batch"
+      ],
+      "expected_load_multiplier": 2.4,
+      "freeze_optimization": true,
+      "severity": "high"
+    },
+    {
+      "event_id": "EVT-004",
+      "name": "Media Partner Launch",
+      "start": "2026-09-20T10:00:00Z",
+      "end": "2026-09-20T22:00:00Z",
+      "affected_workloads": [
+        "image-resizer",
+        "search-indexer"
+      ],
+      "expected_load_multiplier": 2.0,
+      "freeze_optimization": false,
+      "severity": "medium"
+    },
+    {
+      "event_id": "EVT-005",
+      "name": "Month-End Reporting",
+      "start": "2026-09-30T00:00:00Z",
+      "end": "2026-09-30T23:59:00Z",
+      "affected_workloads": [
+        "analytics-batch",
+        "search-indexer"
+      ],
+      "expected_load_multiplier": 2.7,
+      "freeze_optimization": true,
+      "severity": "high"
+    }
+  ]
+}
