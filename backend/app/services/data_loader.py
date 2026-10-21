@@ -323,15 +323,18 @@ def _deployment_records(documents: Any) -> list[dict[str, Any]]:
             "cpu_limit_millicores": cpu_limit,
             "memory_request_mib": memory_request,
             "memory_limit_mib": memory_limit,
+            "criticality": (metadata.get("labels") or {}).get("finops.example.com/criticality", "medium"),
+            "protected": str((metadata.get("labels") or {}).get("finops.example.com/protected", "false")).lower() == "true",
+            "autoscaler_enabled": (metadata.get("labels") or {}).get("finops.example.com/autoscaler-enabled"),
         })
     if not records:
         raise ValueError(f"Malformed {DATA_FILES['deployments']}: no Deployment records found")
     return records
 
 
-def _sum_kubernetes_quantity(values: list[Any], kind: str) -> int:
-    if any(value is None for value in values):
-        raise ValueError(f"Kubernetes Deployment is missing a container {kind} resource")
+def _sum_kubernetes_quantity(values: list[Any], kind: str) -> int | None:
+    if not values or any(value is None for value in values):
+        return None
     total = 0.0
     for value in values:
         text = str(value).strip()
@@ -353,7 +356,7 @@ def _sum_kubernetes_quantity(values: list[Any], kind: str) -> int:
 def _normalize_event(event: Any) -> Any:
     if not isinstance(event, dict):
         return event
-    multiplier = event.get("expected_load_multiplier", 1)
+    multiplier = float(event.get("expected_load_multiplier", 1) or 1)
     return {
         "name": event.get("name", ""),
         "start_at": event.get("start_at", event.get("start")),
@@ -361,7 +364,9 @@ def _normalize_event(event: Any) -> Any:
         "services": event.get("services", event.get("affected_workloads", [])),
         "expected_traffic": event.get("expected_traffic", "high" if multiplier >= 1.5 else "normal"),
         "risk": event.get("risk", event.get("severity", "low")),
-        "notes": event.get("notes", ""),
+        "notes": event.get("notes") or "",
+        "expected_load_multiplier": multiplier,
+        "freeze_optimization": event.get("freeze_optimization", False),
     }
 
 

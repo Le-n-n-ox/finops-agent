@@ -21,10 +21,11 @@ CREATE TABLE IF NOT EXISTS reports(report_id TEXT PRIMARY KEY, created_at TEXT N
 CREATE TABLE IF NOT EXISTS decisions(
   decision_id TEXT PRIMARY KEY, report_id TEXT NOT NULL REFERENCES reports(report_id), workload_id TEXT NOT NULL, namespace TEXT NOT NULL,
   decision TEXT NOT NULL, risk_level TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL, policy_version TEXT NOT NULL,
-  config_hash TEXT NOT NULL, metrics_at TEXT, event_version TEXT NOT NULL, payload TEXT NOT NULL);
+  config_hash TEXT NOT NULL, metrics_at TEXT, event_version TEXT NOT NULL, payload TEXT NOT NULL,
+  rule_version TEXT NOT NULL DEFAULT 'rules-1', input_fingerprint TEXT);
 CREATE TABLE IF NOT EXISTS reviews(
   id INTEGER PRIMARY KEY AUTOINCREMENT, decision_id TEXT NOT NULL REFERENCES decisions(decision_id), report_id TEXT NOT NULL,
-  workload_id TEXT NOT NULL, action TEXT NOT NULL, comment TEXT, reviewer TEXT, created_at TEXT NOT NULL);
+  workload_id TEXT NOT NULL, action TEXT NOT NULL, comment TEXT, reviewer TEXT, created_at TEXT NOT NULL, outcome TEXT);
 CREATE TABLE IF NOT EXISTS policies(id INTEGER PRIMARY KEY AUTOINCREMENT, version TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_dec_workload ON decisions(workload_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_rev_decision ON reviews(decision_id);
@@ -45,17 +46,27 @@ class Store:
         self._db.row_factory = sqlite3.Row
         with self._lock:
             self._db.executescript(_SCHEMA + _APPEND_ONLY)
+            review_columns = {row[1] for row in self._db.execute("PRAGMA table_info(reviews)")}
+            if "outcome" not in review_columns:
+                self._db.execute("ALTER TABLE reviews ADD COLUMN outcome TEXT")
+            decision_columns = {row[1] for row in self._db.execute("PRAGMA table_info(decisions)")}
+            if "rule_version" not in decision_columns:
+                self._db.execute("ALTER TABLE decisions ADD COLUMN rule_version TEXT NOT NULL DEFAULT 'rules-1'")
+            if "input_fingerprint" not in decision_columns:
+                self._db.execute("ALTER TABLE decisions ADD COLUMN input_fingerprint TEXT")
 
     # ------------------------------------------------------------------ reports + decisions
     def save_decision_record(self, result: WorkloadResult, report_id: str, fp: Fingerprint, policy_version: str,
+                             rule_version: str = "rules-1", input_fingerprint: str | None = None,
                              created_at: datetime | None = None) -> str:
         """Persist an immutable decision snapshot and return its ID."""
         did = f"DEC-{report_id}-{result.workload_id}"
         self._db.execute(
-            "INSERT INTO decisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO decisions(decision_id,report_id,workload_id,namespace,decision,risk_level,reason,created_at,policy_version,config_hash,metrics_at,event_version,payload,rule_version,input_fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (did, report_id, result.workload_id, result.namespace, result.decision.value, result.risk_level.value, result.reason,
              (created_at or _now()).isoformat(), policy_version, fp.config_hash,
-             fp.metrics_at.isoformat() if fp.metrics_at else None, fp.event_version, result.model_dump_json()))
+             fp.metrics_at.isoformat() if fp.metrics_at else None, fp.event_version, result.model_dump_json(),
+             rule_version, input_fingerprint))
         return did
 
     def save_report(self, response: AnalysisResponse, fingerprints: Mapping[str, Fingerprint], policy_version: str) -> list[str]:
@@ -65,7 +76,8 @@ class Store:
             try:
                 self._db.execute("INSERT INTO reports VALUES (?,?,?,?)",
                                  (response.analysis_id, created.isoformat(), policy_version, response.model_dump_json()))
-                ids = [self.save_decision_record(r, response.analysis_id, fingerprints[r.workload_id], policy_version, created)
+                ids = [self.save_decision_record(r, response.analysis_id, fingerprints[r.workload_id], policy_version,
+                                                 response.rule_version, response.input_fingerprint, created)
                        for r in response.results]
                 self._db.execute("COMMIT")
                 return ids
@@ -91,7 +103,8 @@ class Store:
         return DecisionRecord(
             decision_id=row["decision_id"], report_id=row["report_id"], workload_id=row["workload_id"], namespace=row["namespace"],
             decision=DecisionStatus(row["decision"]), risk_level=row["risk_level"], reason=row["reason"],
-            created_at=row["created_at"], policy_version=row["policy_version"], config_hash=row["config_hash"],
+            created_at=row["created_at"], policy_version=row["policy_version"], rule_version=row["rule_version"],
+            input_fingerprint=row["input_fingerprint"], config_hash=row["config_hash"],
             metrics_at=row["metrics_at"], event_version=row["event_version"],
             latest_action=ReviewAction(last["action"]) if last else None,
             snapshot=WorkloadResult.model_validate_json(row["payload"]) if with_snapshot else None)
@@ -124,7 +137,7 @@ class Store:
 
     # ------------------------------------------------------------------ audit trail
     def record_reviewer_action(self, decision_id: str, action: ReviewAction, comment: str | None = None,
-                               reviewer: str | None = None) -> AuditRecord:
+                               reviewer: str | None = None, outcome: str | None = None) -> AuditRecord:
         """Append a review event. Never edits the decision. Only APPROVED decisions can be accepted for implementation."""
         dec = self.get_decision(decision_id, with_snapshot=False)
         if dec is None:
@@ -133,10 +146,10 @@ class Store:
             raise ValueError(f"Only approved decisions can be accepted for implementation (this one is {dec.decision.value}).")
         created = _now()
         with self._lock:
-            cur = self._db.execute("INSERT INTO reviews(decision_id,report_id,workload_id,action,comment,reviewer,created_at) VALUES (?,?,?,?,?,?,?)",
-                                   (decision_id, dec.report_id, dec.workload_id, action.value, comment, reviewer, created.isoformat()))
+            cur = self._db.execute("INSERT INTO reviews(decision_id,report_id,workload_id,action,comment,reviewer,created_at,outcome) VALUES (?,?,?,?,?,?,?,?)",
+                                   (decision_id, dec.report_id, dec.workload_id, action.value, comment, reviewer, created.isoformat(), outcome))
         return AuditRecord(id=cur.lastrowid, decision_id=decision_id, report_id=dec.report_id, workload_id=dec.workload_id,
-                           action=action, comment=comment, reviewer=reviewer, created_at=created)
+                           action=action, comment=comment, reviewer=reviewer, created_at=created, outcome=outcome)
 
     def audit(self, *, decision_id: str | None = None, report_id: str | None = None, limit: int = 200) -> list[AuditRecord]:
         sql, args = "SELECT * FROM reviews WHERE 1=1", []

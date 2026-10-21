@@ -69,7 +69,7 @@ The `data/` directory contains synthetic fixture inputs: `deployments.yaml`, `us
 - **Meterless / Nightshift runner seam:** the orchestrator routes collector, optimizer, and critic steps through `get_runner()`. `AGENT_RUNTIME=meterless` selects the Meterless-named scaffold, but the current runner still executes each function locally. `METERLESS_BASE_URL` is logged as configuration only; this scaffold does not call the hotspot or enforce a Markovian context engine. It is an integration seam, not a claim of remote execution.
 - **NVIDIA NIM:** can provide critic explanation text when configured. Deterministic critic checks remain authoritative.
 
-More details: [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) and [`docs/CONTRACT.md`](docs/CONTRACT.md).
+More details: [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md), [`docs/CONTRACT.md`](docs/CONTRACT.md), and [`docs/FINOPS_METHOD.md`](docs/FINOPS_METHOD.md) for the sizing formula, risk findings, and measurable scenario results.
 
 ## Run with Docker Compose
 

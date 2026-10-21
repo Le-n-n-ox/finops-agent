@@ -75,6 +75,7 @@ class AuditRecord(BaseModel):
     comment: str | None = None
     reviewer: str | None = None
     created_at: datetime
+    outcome: str | None = None
 
 
 class ExpiryResult(BaseModel):
@@ -93,6 +94,8 @@ class DecisionRecord(BaseModel):
     reason: str
     created_at: datetime
     policy_version: str
+    rule_version: str = "rules-1"
+    input_fingerprint: str | None = None
     config_hash: str
     metrics_at: datetime | None
     event_version: str
@@ -105,6 +108,7 @@ class ReviewRequest(BaseModel):
     action: ReviewAction
     comment: str | None = Field(default=None, max_length=2000)
     reviewer: str | None = Field(default=None, max_length=120)
+    outcome: str | None = Field(default=None, max_length=80)
 
 
 class DecisionDetail(BaseModel):

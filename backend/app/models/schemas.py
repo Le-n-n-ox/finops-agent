@@ -50,10 +50,13 @@ class WorkloadSpec(BaseModel):
     name: str = Field(min_length=1)
     namespace: str = "default"
     replicas: int = 1
-    cpu_request_millicores: int
-    cpu_limit_millicores: int
-    memory_request_mib: int
-    memory_limit_mib: int
+    cpu_request_millicores: int | None = None
+    cpu_limit_millicores: int | None = None
+    memory_request_mib: int | None = None
+    memory_limit_mib: int | None = None
+    criticality: str = "medium"
+    protected: bool = False
+    autoscaler_enabled: bool | None = None
 
 
 class UsageRow(BaseModel):
@@ -87,6 +90,8 @@ class BusinessEvent(BaseModel):
     expected_traffic: str = "normal"   # low | normal | high
     risk: str = "low"                  # low | medium | high
     notes: str = ""
+    expected_load_multiplier: float = Field(default=1.0, ge=1.0)
+    freeze_optimization: bool = False
 
 
 class IncidentRecord(BaseModel):
@@ -116,6 +121,7 @@ class IncidentRecord(BaseModel):
 class CostModel(BaseModel):
     cpu_core_monthly_cost_usd: float | None = Field(default=None, ge=0)
     memory_gib_monthly_cost_usd: float | None = Field(default=None, ge=0)
+    rate_uncertainty_pct: float = Field(default=20.0, ge=0, le=100)
     note: str = "Illustrative demo rates only; not a cloud-provider quote"
 
 
@@ -131,17 +137,28 @@ class OptimizerPolicy(BaseModel):
     memory_round_mib: int = 64
     min_reduction_pct: float = 15.0
     max_metric_age_hours: float = 72   # latest metric older than this -> needs_review
+    window_days: int = Field(default=30, ge=1, le=365)
     p99_min_samples: int = Field(default=100, ge=1)  # below this, p99 is omitted from the evidence summary
+    criticality_headroom: dict[str, float] = Field(default_factory=dict)
+    event_projection_hours: int = Field(default=168, ge=0)
+
+
+class PolicyException(BaseModel):
+    workload_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+    expires_at: datetime
 
 
 class CriticPolicy(BaseModel):
     """Developer 2 owns these. Every field added after v1 defaults to the previous behaviour."""
     version: str = "demo-1"                 # recorded in every decision snapshot (audit)
+    rule_version: str = "rules-1"
     risk_window_hours: int = 48
     stale_after_hours: int = 72
     cpu_floor_p99_multiplier: float = 1.10
     memory_floor_p99_multiplier: float = 1.15
     min_monthly_saving_usd: float = 1.0
+    top_n_findings: int = Field(default=5, ge=1, le=50)
     min_samples: int = 24                    # critic re-checks evidence volume (fail safe)
     min_cpu_request_millicores: int = 50     # absolute floors
     min_memory_request_mib: int = 128
@@ -152,6 +169,8 @@ class CriticPolicy(BaseModel):
     change_window_days: list[int] = []       # permitted weekdays (0=Mon..6=Sun); empty = any day
     change_window_start_hour: int = 0        # permitted hours [start, end) in the analysis clock's timezone
     change_window_end_hour: int = 24
+    criticality_headroom: dict[str, float] = Field(default_factory=dict)
+    policy_exceptions: list[PolicyException] = Field(default_factory=list)
 
 
 class Policy(BaseModel):
@@ -277,6 +296,8 @@ class IncidentEvidence(BaseModel):
 
 class SavingsEstimate(BaseModel):
     monthly_savings_usd: float | None = None
+    monthly_savings_low_usd: float | None = None
+    monthly_savings_high_usd: float | None = None
     cpu_request_reduction_pct: float = 0.0
     memory_request_reduction_pct: float = 0.0
     total_request_reduction_pct: float = 0.0
@@ -286,8 +307,23 @@ class SavingsEstimate(BaseModel):
     assumptions: list[str] = []
 
 
+class ResourceFinding(BaseModel):
+    code: str
+    category: str
+    severity: RiskLevel
+    message: str
+    resource: str | None = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class RolloutGuidance(BaseModel):
+    test_steps: list[str]
+    watch_metrics: list[str]
+    rollback: str
+
+
 class PriorityBreakdown(BaseModel):
-    value_score: float = Field(ge=0, le=100)
+    value_score: float = Field(ge=0)
     confidence_score: float = Field(ge=0, le=100)
     risk_penalty: float = Field(ge=0, le=100)
     explanation: str
@@ -312,8 +348,9 @@ class OptimizationProposal(BaseModel):
     incident_evidence: list[IncidentEvidence] = []
     metric_window: MetricWindow | None = None
     savings_estimate: SavingsEstimate | None = None
-    priority_score: float | None = Field(default=None, ge=0, le=100)
+    priority_score: float | None = Field(default=None, ge=0)
     priority_breakdown: PriorityBreakdown | None = None
+    findings: list[ResourceFinding] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- Developer 2 output
@@ -353,6 +390,7 @@ class WorkloadResult(BaseModel):
     yaml_patch: str | None = None  # review-only
     usage_series: list[UsagePoint] = []   # optional, for the UI usage chart
     events: list[EventWindow] = []        # optional, for the UI event band
+    rollout_guidance: RolloutGuidance | None = None
 
 
 class AnalysisSummary(BaseModel):
@@ -399,3 +437,16 @@ class AnalysisResponse(BaseModel):
     warnings: list[str] = []
     input_issues: list[ValidationIssue] = []
     data_health: ValidationResponse | None = None
+    policy_version: str = "demo-1"
+    rule_version: str = "rules-1"
+    input_fingerprint: str | None = None
+    top_n_findings: int = 5
+    top_opportunities: list["TopOpportunity"] = Field(default_factory=list)
+
+
+class TopOpportunity(BaseModel):
+    workload_id: str
+    monthly_savings_usd: float
+    priority_score: float
+    confidence_score: float
+    risk_level: RiskLevel

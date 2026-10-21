@@ -18,6 +18,7 @@ class Opportunity(BaseModel):
     workload_id: str
     decision: DecisionStatus
     potential_saving_usd: float
+    priority_score: float = 0.0
 
 
 class TrendPoint(BaseModel):
@@ -58,6 +59,7 @@ class WorkloadRow(BaseModel):
     memory_request_mib: int | None
     proposed_memory_request_mib: int | None
     potential_saving_usd: float
+    priority_score: float = 0.0
     data_quality: int            # 0-100 = 60% sample volume (vs 72 h) + 40% freshness (vs stale_after_hours)
     latest_action: ReviewAction | None = None
 
@@ -92,14 +94,16 @@ def dashboard(svc: Services = Depends(get_services)) -> DashboardSummary:
             return DashboardSummary(has_data=False)
         latest, s = reports[0], reports[0].summary
         potential = round(sum(r.proposal.estimated_monthly_saving_usd for r in latest.results), 2)
-        top = sorted(latest.results, key=lambda r: r.proposal.estimated_monthly_saving_usd, reverse=True)[:3]
+        top_n = latest.top_n_findings or (svc.store.get_policy() or CriticPolicy()).top_n_findings
+        top = sorted(latest.results, key=lambda r: r.proposal.priority_score or 0.0, reverse=True)[:top_n]
         return DashboardSummary(
             has_data=True, report_id=latest.analysis_id, generated_at=latest.generated_at, workloads_analyzed=s.workloads_evaluated,
             approved=s.approved, deferred=s.deferred, rejected=s.rejected, needs_review=s.needs_review, no_change=s.no_change,
             estimated_monthly_savings_usd=s.estimated_monthly_savings_usd, potential_savings_usd=potential,
             held_back_usd=round(potential - s.estimated_monthly_savings_usd, 2),
             top_opportunities=[Opportunity(workload_id=r.workload_id, decision=r.decision,
-                                           potential_saving_usd=r.proposal.estimated_monthly_saving_usd) for r in top],
+                                           potential_saving_usd=r.proposal.estimated_monthly_saving_usd,
+                                           priority_score=r.proposal.priority_score or 0.0) for r in top],
             trend=[TrendPoint(report_id=r.analysis_id, generated_at=r.generated_at, approved=r.summary.approved,
                               deferred=r.summary.deferred, rejected=r.summary.rejected, needs_review=r.summary.needs_review,
                               no_change=r.summary.no_change, savings_usd=r.summary.estimated_monthly_savings_usd)
@@ -122,9 +126,10 @@ def workloads(svc: Services = Depends(get_services)) -> list[WorkloadRow]:
                 cpu_request_millicores=p.current.cpu_request_millicores, memory_request_mib=p.current.memory_request_mib,
                 proposed_cpu_request_millicores=p.proposed.cpu_request_millicores if p.proposed else None,
                 proposed_memory_request_mib=p.proposed.memory_request_mib if p.proposed else None,
-                potential_saving_usd=p.estimated_monthly_saving_usd, data_quality=_quality(r, latest.generated_at, stale_after),
+                potential_saving_usd=p.estimated_monthly_saving_usd, priority_score=p.priority_score or 0.0,
+                data_quality=_quality(r, latest.generated_at, stale_after),
                 latest_action=rec.latest_action if rec else None))
-        return sorted(rows, key=lambda w: w.potential_saving_usd, reverse=True)
+        return sorted(rows, key=lambda w: w.priority_score, reverse=True)
 
 
 @router.get("/workloads/{workload_id}")

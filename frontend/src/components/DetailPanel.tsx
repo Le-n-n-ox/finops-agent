@@ -112,6 +112,19 @@ export default function DetailPanel({ result, className, onClose }: { result: Wo
               <dt className="text-muted-foreground">Memory p95 / p99</dt><dd className="tabular-nums">{p.metrics.memory_p95 ?? '—'} / {p.metrics.memory_p99 ?? '—'} MiB</dd>
               <dt className="text-muted-foreground">Limits (context)</dt><dd className="tabular-nums">{p.current.cpu_limit_millicores ?? '—'} m / {p.current.memory_limit_mib ?? '—'} MiB</dd>
             </dl>
+            {p.confidence && <p className="text-sm"><span className="font-medium">Confidence:</span> {p.confidence.score}/100 ({p.confidence.label})</p>}
+            {p.priority_score != null && <p className="text-xs text-muted-foreground">Priority score {p.priority_score.toFixed(2)} (estimated savings × confidence ÷ operational risk)</p>}
+            {p.savings_estimate?.pricing_available && <p className="text-xs text-muted-foreground">Illustrative monthly estimate range: ${p.savings_estimate.monthly_savings_low_usd?.toFixed(2) ?? '—'}–${p.savings_estimate.monthly_savings_high_usd?.toFixed(2) ?? '—'}. {p.savings_estimate.assumptions.join(' ')}</p>}
+            {!!p.findings?.length && <section className="space-y-2 rounded-md border p-3">
+              <h3 className="text-sm font-medium">Capacity and configuration findings</h3>
+              {p.findings.map((finding) => <p key={finding.code} className="text-sm text-muted-foreground"><span className="font-medium">{finding.severity.toUpperCase()} · {finding.code}:</span> {finding.message}</p>)}
+            </section>}
+            {result.rollout_guidance && <section className="space-y-2 rounded-md border p-3">
+              <h3 className="text-sm font-medium">Rollout and rollback</h3>
+              <p className="text-xs font-medium">Test</p>{result.rollout_guidance.test_steps.map((step) => <p key={step} className="text-xs text-muted-foreground">• {step}</p>)}
+              <p className="text-xs font-medium">Watch</p>{result.rollout_guidance.watch_metrics.map((metric) => <p key={metric} className="text-xs text-muted-foreground">• {metric}</p>)}
+              <p className="text-xs text-muted-foreground"><span className="font-medium">Rollback:</span> {result.rollout_guidance.rollback}</p>
+            </section>}
           </TabsContent>
 
           <TabsContent value="critic">

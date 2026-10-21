@@ -45,6 +45,7 @@ export interface OptimizationProposal {
   savings_estimate?: SavingsEstimate | null
   priority_score?: number | null
   priority_breakdown?: PriorityBreakdown | null
+  findings?: ResourceFinding[]
 }
 
 export interface DataQualityResult {
@@ -98,6 +99,8 @@ export interface IncidentEvidence {
 export interface MetricWindow { start: string | null; end: string | null; sample_count: number }
 export interface SavingsEstimate {
   monthly_savings_usd: number | null
+  monthly_savings_low_usd?: number | null
+  monthly_savings_high_usd?: number | null
   cpu_request_reduction_pct: number
   memory_request_reduction_pct: number
   total_request_reduction_pct: number
@@ -106,6 +109,8 @@ export interface SavingsEstimate {
   days: number
   assumptions: string[]
 }
+export interface ResourceFinding { code: string; category: string; severity: RiskLevel; message: string; resource?: string | null; evidence: Record<string, unknown> }
+export interface RolloutGuidance { test_steps: string[]; watch_metrics: string[]; rollback: string }
 export interface PriorityBreakdown { value_score: number; confidence_score: number; risk_penalty: number; explanation: string }
 
 export interface CriticCheck {
@@ -133,6 +138,7 @@ export interface WorkloadResult {
   yaml_patch: string | null
   usage_series?: UsagePoint[]
   events?: EventWindow[]
+  rollout_guidance?: RolloutGuidance | null
 }
 
 export interface AnalysisSummary {
@@ -163,7 +169,14 @@ export interface AnalysisResponse {
   warnings: string[]
   input_issues?: ValidationIssue[]
   data_health?: ValidationResponse | null
+  policy_version?: string
+  rule_version?: string
+  input_fingerprint?: string | null
+  top_n_findings?: number
+  top_opportunities?: TopOpportunity[]
 }
+
+export interface TopOpportunity { workload_id: string; monthly_savings_usd: number; priority_score: number; confidence_score: number; risk_level: RiskLevel }
 
 export interface WorkloadDataHealth {
   workload_id: string
