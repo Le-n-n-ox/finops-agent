@@ -1,0 +1,2 @@
+incident_id,service,occurred_at,pattern,summary
+INC-2041,recommendation-api,2026-08-21T14:10:00+03:00,memory spike after model refresh,OOMKilled after nightly model refresh when memory request was reduced
