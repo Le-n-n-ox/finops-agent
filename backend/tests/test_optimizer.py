@@ -15,7 +15,7 @@ def _by_id():
 
 def test_one_proposal_per_service():
     assert set(_by_id()) == {service.name for service in load_inputs(DATA).services}
-    assert len(_by_id()) == 10
+    assert len(_by_id()) == 12
 
 
 def test_recent_service_has_recommendation_metrics():

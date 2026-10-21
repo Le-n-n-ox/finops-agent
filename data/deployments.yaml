@@ -283,3 +283,63 @@ spec:
             limits:
               cpu: "3000m"
               memory: "10240Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docs-renderer
+  namespace: platform-tools
+  labels:
+    finops.example.com/criticality: low
+    finops.example.com/protected: "false"
+    finops.example.com/autoscaler-enabled: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: docs-renderer
+  template:
+    metadata:
+      labels:
+        app: docs-renderer
+    spec:
+      containers:
+        - name: docs-renderer
+          image: example.invalid/docs-renderer:1.0.0
+          resources:
+            requests:
+              cpu: "800m"
+              memory: "3072Mi"
+            limits:
+              cpu: "1600m"
+              memory: "4096Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: queue-cleaner
+  namespace: platform-tools
+  labels:
+    finops.example.com/criticality: low
+    finops.example.com/protected: "false"
+    finops.example.com/autoscaler-enabled: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: queue-cleaner
+  template:
+    metadata:
+      labels:
+        app: queue-cleaner
+    spec:
+      containers:
+        - name: queue-cleaner
+          image: example.invalid/queue-cleaner:1.0.0
+          resources:
+            requests:
+              cpu: "400m"
+              memory: "2048Mi"
+            limits:
+              cpu: "800m"
+              memory: "3072Mi"

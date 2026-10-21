@@ -2,6 +2,8 @@
 
 This is a recommendation-only demo. The scenario metrics below measure deterministic behavior on the planted fixtures; they are not a production accuracy claim.
 
+The local fixture includes two additional synthetic, low-criticality workloads (`docs-renderer` and `queue-cleaner`) with 30 days of low, steady usage and no matching incidents or business events. They are included to demonstrate safe approvals alongside protected and risk-challenged examples; they are not live services.
+
 ## Right-sizing method
 
 - Analyze the most recent 30 days of usage. Require at least 168 hourly samples spanning at least 7 days, and a latest sample no older than 72 hours. Missing, stale, or malformed evidence yields `needs_review` and no patch.

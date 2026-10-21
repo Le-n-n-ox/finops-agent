@@ -12,8 +12,8 @@ This writes import-ready CSVs to `data/zetaris_upload/`:
 
 | Upload file | Zetaris table | Expected rows |
 | --- | --- | ---: |
-| `deployments.csv` | `deployments` | 10 |
-| `usage_history.csv` | `usage_history` | 7,200 |
+| `deployments.csv` | `deployments` | 12 |
+| `usage_history.csv` | `usage_history` | 8,640 |
 | `business_events.csv` | `business_events` | 5 |
 | `incident_history.csv` | `incident_history` | 7 |
 
