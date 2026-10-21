@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -356,13 +356,12 @@ class OptimizationProposal(BaseModel):
 # --------------------------------------------------------------------------- Developer 2 output
 class CriticCheck(BaseModel):
     name: str                      # event_window | metrics_completeness | incident_pattern | resource_floor | benefit
-    code: str                      # stable code, e.g. HIGH_IMPACT_EVENT
+    code: str                        # stable code, e.g. HIGH_IMPACT_EVENT
     status: CheckStatus
     message: str
     evidence: dict[str, Any] = {}  # event id, usage window, incident id, computed floor ...
-    
-    
-    
+
+
 class UsagePoint(BaseModel):
     """OPTIONAL chart data for the UI (hourly usage). Units as everywhere: millicores / MiB."""
     t: datetime
@@ -450,3 +449,29 @@ class TopOpportunity(BaseModel):
     priority_score: float
     confidence_score: float
     risk_level: RiskLevel
+
+# --------------------------------------------------------------------------- Agent Schemas
+class ToolCall(BaseModel):
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    tool: str
+    params: Dict[str, Any]
+    result: Any
+    thought: Optional[str] = None
+
+class VerificationStep(BaseModel):
+    claimed_value: str
+    source_tool: Optional[str] = None
+    status: str  # "verified" | "unverified"
+
+class AgentAuditLog(BaseModel):
+    session_id: str
+    workload_id: str
+    steps: List[ToolCall] = []
+    final_decision: Optional[DecisionStatus] = None
+    verification_report: List[VerificationStep] = []
+
+class VerificationResult(BaseModel):
+    is_valid: bool
+    errors: List[str] = []
+    verified_count: int = 0
+    unverified_count: int = 0

@@ -23,7 +23,7 @@ def test_deployments_fixture_parses():
     deployments = [doc for doc in yaml.safe_load_all((DATA / "deployments.yaml").read_text())
                    if isinstance(doc, dict) and doc.get("kind") == "Deployment"]
     bundle = load_inputs(DATA)
-    assert len(deployments) == len(bundle.services) == 10
+    assert len(deployments) == len(bundle.services) == 12
     assert all(spec.memory_request_mib > 0 for spec in bundle.services)
 
 
@@ -37,6 +37,6 @@ def test_usage_fixture_has_expected_coverage():
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["workload"]] = counts.get(row["workload"], 0) + 1
-    assert len(counts) == 10
+    assert len(counts) == 12
     assert all(v == 720 for v in counts.values())
     assert sum(row["data_quality_flag"] == "imputed_mock_cpu" for row in rows) == 16

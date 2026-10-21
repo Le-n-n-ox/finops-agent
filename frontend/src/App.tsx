@@ -37,6 +37,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [scenario, setScenario] = useState('all')
+  const [mode, setMode] = useState<'pipeline' | 'agent'>('pipeline')
   const [filter, setFilter] = useState<DecisionStatus | 'all'>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const isDesktop = useMediaQuery('(min-width: 1024px)')
@@ -45,7 +46,7 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const res = await runAnalysis(scenario)
+      const res = await runAnalysis(scenario, mode)
       setState(res)
       setFilter('all')
       // single-workload scenarios open their detail straight away (demo flow)
@@ -55,7 +56,7 @@ export default function App() {
     } finally {
       setLoading(false)
     }
-  }, [scenario])
+  }, [scenario, mode])
 
   useEffect(() => { void load() }, [load])
 
