@@ -57,6 +57,8 @@ def _parse_list(value: Any) -> list[str]:
             return [str(x).strip() for x in parsed]
     except json.JSONDecodeError:
         pass
+    if "|" in text:
+        return [p.strip() for p in text.split("|") if p.strip()]
     return [p.strip() for p in text.strip("[]").replace('"', "").split(",") if p.strip()]
 
 
@@ -85,6 +87,8 @@ def _build(
 
 def _fix_event(rec: dict[str, Any]) -> dict[str, Any]:
     rec["services"] = _parse_list(rec.get("services"))
+    # Zetaris maps blank CSV cells to null; the app's event model expects text.
+    rec["notes"] = rec.get("notes") or ""
     return rec
 
 
