@@ -241,3 +241,145 @@ finops-agent
    └─ generate_sample_response.py
 
 ```
+
+```
+finops-agent
+├─ .cursor
+│  └─ rules
+│     └─ finops.mdc
+├─ .dockerignore
+├─ backend
+│  ├─ app
+│  │  ├─ api
+│  │  │  ├─ deps.py
+│  │  │  ├─ routes
+│  │  │  │  ├─ analysis.py
+│  │  │  │  ├─ data.py
+│  │  │  │  ├─ reports.py
+│  │  │  │  └─ __init__.py
+│  │  │  └─ __init__.py
+│  │  ├─ integrations
+│  │  │  ├─ meterless_runner.py
+│  │  │  ├─ nvidia_nim.py
+│  │  │  ├─ zetaris_client.py
+│  │  │  ├─ zetaris_source.py
+│  │  │  └─ __init__.py
+│  │  ├─ main.py
+│  │  ├─ models
+│  │  │  ├─ review.py
+│  │  │  ├─ schemas.py
+│  │  │  └─ __init__.py
+│  │  ├─ services
+│  │  │  ├─ confidence_service.py
+│  │  │  ├─ critic_service.py
+│  │  │  ├─ data_loader.py
+│  │  │  ├─ fingerprints.py
+│  │  │  ├─ incident_service.py
+│  │  │  ├─ optimizer_service.py
+│  │  │  ├─ orchestrator.py
+│  │  │  ├─ report_service.py
+│  │  │  ├─ savings.py
+│  │  │  ├─ simulator.py
+│  │  │  ├─ store.py
+│  │  │  ├─ usage_service.py
+│  │  │  ├─ validation_service.py
+│  │  │  └─ __init__.py
+│  │  └─ __init__.py
+│  ├─ requirements.txt
+│  └─ tests
+│     ├─ test_data_loader.py
+│     ├─ test_incident_service.py
+│     ├─ test_optimizer.py
+│     ├─ test_optimizer_additions.py
+│     ├─ test_optimizer_logic.py
+│     ├─ test_schemas.py
+│     ├─ test_usage_service.py
+│     ├─ test_zetaris_client.py
+│     ├─ test_zetaris_source.py
+│     └─ __init__.py
+├─ data
+│  ├─ business_events.json
+│  ├─ cost_model.json
+│  ├─ deployments.json
+│  ├─ deployments.yaml
+│  ├─ incident_history.csv
+│  ├─ policy.yaml
+│  ├─ sample_analysis_response.json
+│  └─ usage_history.csv
+├─ docker-compose.yml
+├─ Dockerfile
+├─ docs
+│  ├─ CONTRACT.md
+│  ├─ CURSOR.md
+│  ├─ INTEGRATIONS.md
+│  └─ ZETARIS_SETUP.md
+├─ e -i HEAD~5
+├─ frontend
+│  ├─ .oxlintrc.json
+│  ├─ components.json
+│  ├─ Dockerfile
+│  ├─ index.html
+│  ├─ package-lock.json
+│  ├─ package.json
+│  ├─ public
+│  │  ├─ favicon.svg
+│  │  └─ mock
+│  │     ├─ analysis.json
+│  │     ├─ scenarios
+│  │     │  ├─ event-risk.json
+│  │     │  ├─ no-change.json
+│  │     │  ├─ normal.json
+│  │     │  ├─ spike.json
+│  │     │  └─ stale.json
+│  │     └─ scenarios.json
+│  ├─ README.md
+│  ├─ scripts
+│  │  └─ make-mock-scenarios.mjs
+│  ├─ src
+│  │  ├─ api.ts
+│  │  ├─ App.tsx
+│  │  ├─ components
+│  │  │  ├─ AppToaster.tsx
+│  │  │  ├─ DecisionBadge.tsx
+│  │  │  ├─ DecisionDonut.tsx
+│  │  │  ├─ DetailPanel.tsx
+│  │  │  ├─ InputStatus.tsx
+│  │  │  ├─ ResultsTable.tsx
+│  │  │  ├─ SavingsChart.tsx
+│  │  │  ├─ ScenarioSwitcher.tsx
+│  │  │  ├─ SummaryCards.tsx
+│  │  │  ├─ ThemeToggle.tsx
+│  │  │  ├─ ui
+│  │  │  │  ├─ badge.tsx
+│  │  │  │  ├─ button.tsx
+│  │  │  │  ├─ card.tsx
+│  │  │  │  ├─ skeleton.tsx
+│  │  │  │  ├─ table.tsx
+│  │  │  │  └─ tabs.tsx
+│  │  │  ├─ UsageChart.tsx
+│  │  │  ├─ Workflow.tsx
+│  │  │  └─ YamlDiff.tsx
+│  │  ├─ hooks
+│  │  │  ├─ useCountUp.ts
+│  │  │  └─ useMediaQuery.ts
+│  │  ├─ index.css
+│  │  ├─ lib
+│  │  │  ├─ report.ts
+│  │  │  └─ utils.ts
+│  │  ├─ main.tsx
+│  │  └─ types.ts
+│  ├─ tsconfig.app.json
+│  ├─ tsconfig.json
+│  ├─ tsconfig.node.json
+│  └─ vite.config.ts
+├─ pyrightconfig.json
+├─ pytest.ini
+├─ README.md
+└─ scripts
+   ├─ check_nvidia.py
+   ├─ check_zetaris.py
+   ├─ check_zetaris_query.py
+   ├─ generate_fixtures.py
+   └─ generate_sample_response.py
+
+```

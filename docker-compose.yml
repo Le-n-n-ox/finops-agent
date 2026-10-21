@@ -28,7 +28,7 @@ services:
     ports:
       - "5173:5173"
     environment:
-      - API_PROXY_TARGET=http://finops_agent:8000
+      - VITE_API_PROXY=http://finops_agent:8000
     depends_on:
       - finops_agent
     restart: unless-stopped
