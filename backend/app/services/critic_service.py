@@ -515,6 +515,14 @@ def evaluate(proposal: OptimizationProposal, bundle: InputBundle, now: datetime 
         return _result(proposal, DecisionStatus.NEEDS_REVIEW, RiskLevel.MEDIUM, f"Needs review: {reasons or message}", [chk])
 
     if proposal.status is ProposalStatus.NO_CHANGE:
+        # Event-aware sizing can intentionally push the candidate above the current
+        # request, leaving the optimizer with no proposal. Still surface the active
+        # event as the reason for deferral instead of returning a misleading low-risk
+        # NO_CHANGE result before the event critic runs.
+        event_check = check_events(proposal, bundle, now)
+        if event_check.status is T:
+            decision, risk, reason = _decide([event_check])
+            return _result(proposal, decision, risk, reason, [event_check])
         chk = _check("benefit", "BELOW_THRESHOLD", T, reasons or "No safe reduction identified", "none")
         return _result(proposal, DecisionStatus.NO_CHANGE, RiskLevel.LOW, f"No change: {reasons or 'no safe reduction identified'}", [chk])
 

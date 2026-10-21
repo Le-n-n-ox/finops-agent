@@ -11,12 +11,12 @@ export interface ScenarioInfo { id: string; label: string; description: string }
  * Try POST /api/analyze; fall back to bundled fixtures so the UI works before the backend does.
  * `scenario` is sent to the API (ignored until backend supports it) and selects the mock fixture.
  */
-export async function runAnalysis(scenario = 'all'): Promise<LoadResult> {
+export async function runAnalysis(scenario = 'all', mode = 'pipeline'): Promise<LoadResult> {
   try {
     const res = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scenario }),
+      body: JSON.stringify({ scenario, mode }),
     })
     if (!res.ok) throw new Error(`API ${res.status}`)
     return { data: (await res.json()) as AnalysisResponse, source: 'api' }
