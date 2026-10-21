@@ -317,7 +317,7 @@ def check_incidents(proposal: OptimizationProposal, bundle: InputBundle, now: da
 
 # --------------------------------------------------------------------------- headroom + policy rules
 def check_floor(proposal: OptimizationProposal, bundle: InputBundle) -> CriticCheck:
-    """Headroom: a proposed request must stay above p99 x multiplier."""
+    """Ensure reductions keep p99 headroom without blocking unchanged resources."""
     p, m, pol = proposal.proposed, proposal.metrics, bundle.policy.critic
     if p is None:
         return _check("resource_floor", "MISSING_PROPOSAL", S, "Proposal has no proposed requests to verify")
@@ -325,19 +325,36 @@ def check_floor(proposal: OptimizationProposal, bundle: InputBundle) -> CriticCh
         return _check("resource_floor", "NO_P99", S, "p99 usage missing; cannot verify headroom")
     cpu_floor, mem_floor = m.cpu_p99 * pol.cpu_floor_p99_multiplier, m.memory_p99 * pol.memory_floor_p99_multiplier
     breaches: list[str] = []
-    if p.cpu_request_millicores is not None and p.cpu_request_millicores < cpu_floor - _EPS:
+    unchanged_gaps: list[str] = []
+    cpu_reduced = (p.cpu_request_millicores is not None and
+                   (proposal.current.cpu_request_millicores is None or
+                    p.cpu_request_millicores < proposal.current.cpu_request_millicores - _EPS))
+    memory_reduced = (p.memory_request_mib is not None and
+                      (proposal.current.memory_request_mib is None or
+                       p.memory_request_mib < proposal.current.memory_request_mib - _EPS))
+    if cpu_reduced and p.cpu_request_millicores < cpu_floor - _EPS:
         breaches.append(f"CPU {p.cpu_request_millicores} m < floor {cpu_floor:.0f} m "
                         f"({pol.cpu_floor_p99_multiplier:g} × p99 {m.cpu_p99:.0f} m)")
-    if p.memory_request_mib is not None and p.memory_request_mib < mem_floor - _EPS:
+    elif not cpu_reduced and p.cpu_request_millicores is not None and p.cpu_request_millicores < cpu_floor - _EPS:
+        unchanged_gaps.append(f"CPU remains {p.cpu_request_millicores} m below the {cpu_floor:.0f} m floor")
+    if memory_reduced and p.memory_request_mib < mem_floor - _EPS:
         breaches.append(f"memory {p.memory_request_mib} MiB < floor {mem_floor:.0f} MiB "
                         f"({pol.memory_floor_p99_multiplier:g} × p99 {m.memory_p99:.0f} MiB)")
+    elif not memory_reduced and p.memory_request_mib is not None and p.memory_request_mib < mem_floor - _EPS:
+        unchanged_gaps.append(f"memory remains {p.memory_request_mib} MiB below the {mem_floor:.0f} MiB floor")
     ev = dict(cpu_floor_m=round(cpu_floor, 1), memory_floor_mib=round(mem_floor, 1), cpu_p99=m.cpu_p99, memory_p99=m.memory_p99,
-              proposed_cpu_m=p.cpu_request_millicores, proposed_memory_mib=p.memory_request_mib)
+              proposed_cpu_m=p.cpu_request_millicores, proposed_memory_mib=p.memory_request_mib,
+              reduced_resources=[name for name, reduced in (("cpu", cpu_reduced), ("memory", memory_reduced)) if reduced],
+              unchanged_floor_gaps=unchanged_gaps)
     if breaches:
         return _check("resource_floor", "BELOW_P99_FLOOR", T,
                       "Proposed request is below the safety floor: " + "; ".join(breaches), "block", **ev)
+    if unchanged_gaps:
+        return _check("resource_floor", "REDUCTIONS_CLEAR_EXISTING_GAPS", P,
+                      "Reduced requests meet their p99 safety floors; " + "; ".join(unchanged_gaps) +
+                      ". Unchanged resources are not reduced by this proposal.", **ev)
     return _check("resource_floor", "HEADROOM_OK", P,
-                  f"Proposed CPU {p.cpu_request_millicores} m ≥ {cpu_floor:.0f} m and memory {p.memory_request_mib} MiB ≥ {mem_floor:.0f} MiB", **ev)
+                  f"Reduced requests meet their p99 safety floors (CPU {cpu_floor:.0f} m, memory {mem_floor:.0f} MiB)", **ev)
 
 
 def check_policy_rules(proposal: OptimizationProposal, bundle: InputBundle, now: datetime) -> list[CriticCheck]:
