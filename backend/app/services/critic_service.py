@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.models.schemas import (
     BusinessEvent, CheckStatus, CriticCheck, DecisionStatus, IncidentRecord, InputBundle,
-    OptimizationProposal, ProposalStatus, RiskLevel, WorkloadResult,
+    OptimizationProposal, ProposalStatus, RiskLevel, RolloutGuidance, WorkloadResult,
 )
 
 INCIDENT_LOOKBACK_DAYS = 180  # not in CriticPolicy yet; promote to policy.yaml if both devs agree
@@ -81,7 +81,8 @@ def check_metrics(proposal: OptimizationProposal, bundle: InputBundle, now: date
 # --------------------------------------------------------------------------- events
 def _relevant_events(proposal: OptimizationProposal, bundle: InputBundle, now: datetime) -> list[BusinessEvent]:
     pol = bundle.policy.critic
-    window_end = now + timedelta(hours=pol.risk_window_hours)
+    projection_horizon = max(pol.risk_window_hours, bundle.policy.optimizer.event_projection_hours)
+    window_end = now + timedelta(hours=projection_horizon)
     freeze = timedelta(hours=pol.event_freeze_hours_after)
     found = [e for e in bundle.events
              if proposal.workload_id in e.services and _aware(e.end_at) + freeze > now and _aware(e.start_at) <= window_end]
@@ -104,8 +105,8 @@ def check_events(proposal: OptimizationProposal, bundle: InputBundle, now: datet
         when = f"starts in {round(until)}h" if until > 0 else f"is in progress (ends in {round(_hours(_aware(e.end_at) - now))}h)"
         return _check("event_window", "HIGH_IMPACT_EVENT", T, f"{e.name} {when}", "defer", **ev)
     if relevant:
-        return _check("event_window", "LOW_IMPACT_EVENT", P,
-                      f"Event(s) in the {pol.risk_window_hours}h window are not high impact: " + ", ".join(e.name for e in relevant),
+        return _check("event_window", "LOW_IMPACT_EVENT", T,
+                      "Request changes are held during event window(s): " + ", ".join(e.name for e in relevant), "defer",
                       events=[e.name for e in relevant], event_ids=[event_id(e) for e in relevant])
     return _check("event_window", "NO_EVENT", P, f"No event in {pol.risk_window_hours}h window")
 
@@ -134,10 +135,11 @@ def check_incidents(proposal: OptimizationProposal, bundle: InputBundle, now: da
     """Exact match (same workload) can defer. Indirect match (same namespace, other workload) is advisory only."""
     cutoff = now - timedelta(days=INCIDENT_LOOKBACK_DAYS)
     ns = {s.name: s.namespace for s in bundle.services}
-    recent = [i for i in bundle.incidents if cutoff <= _aware(i.occurred_at) <= now and _incident_relevant(i, proposal)]
+    recent = [i for i in bundle.incidents if cutoff <= _aware(i.occurred_at) <= now]
     key = lambda i: _aware(i.occurred_at)  # noqa: E731
     exact = sorted((i for i in recent if i.service == proposal.workload_id), key=key, reverse=True)
-    indirect = sorted((i for i in recent if i.service != proposal.workload_id and ns.get(i.service) == proposal.namespace),
+    indirect = sorted((i for i in recent if i.service != proposal.workload_id and ns.get(i.service) == proposal.namespace
+                       and _incident_relevant(i, proposal)),
                       key=key, reverse=True)
     out: list[CriticCheck] = []
     if exact:
@@ -164,7 +166,10 @@ def check_floor(proposal: OptimizationProposal, bundle: InputBundle) -> CriticCh
         return _check("resource_floor", "MISSING_PROPOSAL", S, "Proposal has no proposed requests to verify")
     if m.cpu_p99 is None or m.memory_p99 is None:
         return _check("resource_floor", "NO_P99", S, "p99 usage missing; cannot verify headroom")
-    cpu_floor, mem_floor = m.cpu_p99 * pol.cpu_floor_p99_multiplier, m.memory_p99 * pol.memory_floor_p99_multiplier
+    spec = next((s for s in bundle.services if s.name == proposal.workload_id), None)
+    headroom = pol.criticality_headroom.get(spec.criticality.lower(), 1.0) if spec else 1.0
+    cpu_floor = m.cpu_p99 * pol.cpu_floor_p99_multiplier * headroom
+    mem_floor = m.memory_p99 * pol.memory_floor_p99_multiplier * headroom
     breaches: list[str] = []
     unchanged_gaps: list[str] = []
     cpu_reduced = (p.cpu_request_millicores is not None and
@@ -207,12 +212,16 @@ def check_policy_rules(proposal: OptimizationProposal, bundle: InputBundle, now:
     cut_mem = _reduction_pct(cur.memory_request_mib, new.memory_request_mib)
     reduces = any(c is not None and c > 0 for c in (cut_cpu, cut_mem))
 
-    if pol.protected_workloads:
-        if proposal.workload_id in pol.protected_workloads and reduces:
+    spec = next((s for s in bundle.services if s.name == proposal.workload_id), None)
+    is_protected = proposal.workload_id in pol.protected_workloads or bool(spec and spec.protected)
+    if is_protected:
+        if reduces:
             out.append(_check("policy_rules", "PROTECTED_WORKLOAD", T,
-                              "Protected workload: request reductions are not allowed by policy", "block"))
+                              "Protected workload: request reductions are not allowed by workload metadata or policy", "block"))
         else:
-            out.append(_check("policy_rules", "NOT_PROTECTED", P, "Workload is not protected (or nothing is reduced)"))
+            out.append(_check("policy_rules", "PROTECTED_NO_REDUCTION", P, "Protected workload has no request reduction."))
+    else:
+        out.append(_check("policy_rules", "NOT_PROTECTED", P, "Workload is not protected by metadata or policy."))
 
     bad = []
     if new.cpu_request_millicores is not None and new.cpu_request_millicores < pol.min_cpu_request_millicores:
@@ -264,7 +273,8 @@ def _decide(checks: list[CriticCheck]) -> tuple[DecisionStatus, RiskLevel, str]:
     if c := first(lambda c: trig(c) and c.code in _BLOCK_CODES):
         return DecisionStatus.REJECTED, RiskLevel.HIGH, f"Rejected: {c.message}. Keeping the current request."
     if c := first(lambda c: trig(c) and c.name == "event_window"):
-        lead = "change freeze" if c.code == "EVENT_FREEZE" else "high-impact event"
+        lead = "change freeze" if c.code == "EVENT_FREEZE" else (
+            "event window" if c.code == "LOW_IMPACT_EVENT" else "high-impact event")
         return DecisionStatus.DEFERRED, RiskLevel.HIGH, f"Deferred: {lead} — {c.message}. Revisit after it ends."
     if c := first(lambda c: trig(c) and c.name == "incident_pattern"):
         return (DecisionStatus.DEFERRED, RiskLevel.HIGH,
@@ -282,11 +292,39 @@ def _decide(checks: list[CriticCheck]) -> tuple[DecisionStatus, RiskLevel, str]:
 
 def _result(proposal: OptimizationProposal, decision: DecisionStatus, risk: RiskLevel, reason: str,
             checks: list[CriticCheck]) -> WorkloadResult:
+    suppress_reduction = any(
+        check.status is CheckStatus.TRIGGERED and check.code in {
+            "HIGH_IMPACT_EVENT", "LOW_IMPACT_EVENT", "EVENT_FREEZE", "PRIOR_INCIDENT_PATTERN", "ACTIVE_POLICY_EXCEPTION"
+        }
+        for check in checks
+    )
+    if suppress_reduction:
+        estimate = proposal.savings_estimate
+        if estimate:
+            estimate = estimate.model_copy(update={"monthly_savings_usd": 0.0,
+                "monthly_savings_low_usd": 0.0, "monthly_savings_high_usd": 0.0,
+                "cpu_request_reduction_pct": 0.0, "memory_request_reduction_pct": 0.0,
+                "total_request_reduction_pct": 0.0,
+                "assumptions": ["No request reduction is recommended while an incident or event deferral is active."]})
+        proposal = proposal.model_copy(update={"proposed": None, "estimated_monthly_saving_usd": 0.0,
+            "savings_estimate": estimate, "priority_score": 0.0,
+            "findings": [finding for finding in proposal.findings
+                         if not finding.code.startswith("OVERPROVISIONED_")]})
+    elif decision is not DecisionStatus.APPROVED:
+        proposal = proposal.model_copy(update={"priority_score": 0.0})
+    guidance = RolloutGuidance(
+        test_steps=["Apply to one canary replica or a staging workload first.",
+                    "Increase rollout gradually only after the observation window passes."],
+        watch_metrics=["CPU throttling and utilization", "Memory working set and OOMKilled restarts",
+                       "Latency, error rate, and workload-specific SLOs"],
+        rollback="Restore the prior requests from the recorded manifest if an SLO regresses, throttling rises, or OOMKills occur.",
+    ) if proposal.proposed is not None else None
     return WorkloadResult(
         workload_id=proposal.workload_id, namespace=proposal.namespace, decision=decision, risk_level=risk,
         reason=reason, checks=checks, proposal=proposal,
         monthly_savings_estimate_usd=proposal.estimated_monthly_saving_usd if decision is DecisionStatus.APPROVED else 0.0,
         yaml_patch=None,  # added by report_service for approved + validated results only
+        rollout_guidance=guidance,
     )
 
 
@@ -295,6 +333,15 @@ def evaluate(proposal: OptimizationProposal, bundle: InputBundle, now: datetime 
     now = _aware(now or bundle.policy.simulation_now or datetime.now(timezone.utc))
     pol = bundle.policy.critic
     reasons = " ".join(proposal.reasons).strip()
+
+    exception = next((item for item in pol.policy_exceptions
+                      if item.workload_id == proposal.workload_id and _aware(item.expires_at) > now), None)
+    if exception:
+        chk = _check("policy_rules", "ACTIVE_POLICY_EXCEPTION",
+                     T, f"Temporarily excluded until {_aware(exception.expires_at).isoformat()}: {exception.reason}",
+                     "none", expires_at=_aware(exception.expires_at).isoformat(), exception_reason=exception.reason)
+        return _result(proposal, DecisionStatus.NO_CHANGE, RiskLevel.LOW,
+                       f"No change: active time-limited policy exception ({exception.reason}).", [chk])
 
     if proposal.workload_id in pol.excluded_workloads:
         chk = _check("policy_rules", "EXCLUDED_WORKLOAD", T, "Workload is excluded from optimisation by policy", "none")

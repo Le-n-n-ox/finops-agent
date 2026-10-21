@@ -46,9 +46,13 @@ def test_confidence_has_explainable_weighted_factors():
                                                       cpu_values=[200] * 50, memory_values=[800] * 50)
     assert 0 <= confidence.score <= 100
     assert {factor.name for factor in confidence.factors} == {
-        "validity", "sample_sufficiency", "freshness", "stability", "anomalies"
+        "validity", "sample_sufficiency", "freshness", "stability", "anomalies", "risk_overlap"
     }
     assert sum(factor.weight for factor in confidence.factors) == 1
+    with_risk = calculate_recommendation_confidence(quality, summary, [], NOW, min_samples=30,
+                                                     cpu_values=[200] * 50, memory_values=[800] * 50,
+                                                     risk_context=True)
+    assert with_risk.score < confidence.score
 
 
 def test_usage_quality_reports_sample_count_freshness_and_missing_data():

@@ -75,4 +75,4 @@ def review(report_id: str, req: ReviewRequest, svc: Services = Depends(get_servi
             expiry = _expiry(record, _try_bundle(svc))
             if expiry and expiry.stale:
                 raise HTTPException(409, f"{expiry.message}: " + "; ".join(expiry.reasons))
-        return svc.store.record_reviewer_action(did, req.action, req.comment, req.reviewer)
+        return svc.store.record_reviewer_action(did, req.action, req.comment, req.reviewer, req.outcome)

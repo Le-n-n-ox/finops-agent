@@ -3,9 +3,9 @@
 simulation_now: "2026-09-30T23:05:00Z"
 
 optimizer:            # Developer 1
-  min_samples: 24
-  min_span_hours: 24
-  cpu_p95_multiplier: 1.25
+  min_samples: 168
+  min_span_hours: 168
+  cpu_p95_multiplier: 1.20
   cpu_p99_multiplier: 1.10
   memory_p95_multiplier: 1.30
   memory_p99_multiplier: 1.15
@@ -13,7 +13,13 @@ optimizer:            # Developer 1
   memory_round_mib: 64
   min_reduction_pct: 15
   max_metric_age_hours: 72
+  window_days: 30
   p99_min_samples: 100
+  criticality_headroom:
+    low: 1.00
+    medium: 1.10
+    critical: 1.25
+  event_projection_hours: 168
 
 critic:               # Developer 2
   risk_window_hours: 48
@@ -21,3 +27,8 @@ critic:               # Developer 2
   cpu_floor_p99_multiplier: 1.10
   memory_floor_p99_multiplier: 1.15
   min_monthly_saving_usd: 1.0
+  top_n_findings: 5
+  criticality_headroom:
+    low: 1.00
+    medium: 1.10
+    critical: 1.25

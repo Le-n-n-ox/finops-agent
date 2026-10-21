@@ -7,8 +7,9 @@ even while they are still being written.
 from __future__ import annotations
 
 import os
+import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from app.integrations.meterless_runner import AgentRunner, get_runner
@@ -22,6 +23,7 @@ from app.models.schemas import (
     OptimizationProposal,
     UsagePoint,
     WorkloadResult,
+    TopOpportunity,
 )
 from app.services.critic_service import evaluate
 from app.services.fingerprints import fingerprint
@@ -44,11 +46,15 @@ def default_proposals(bundle: InputBundle, now: datetime | None = None) -> list[
     return build_proposals(bundle, now=now)
 
 
-def _chart_data(workload_id: str, bundle: InputBundle) -> dict:
+def _chart_data(workload_id: str, bundle: InputBundle, now: datetime) -> dict:
     """Optional UI fields. Only included when the shared schema defines them."""
     extra: dict = {}
     if "usage_series" in WorkloadResult.model_fields:
-        rows = sorted((r for r in bundle.usage_rows if r.service == workload_id), key=lambda r: r.timestamp)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        cutoff = now - timedelta(days=bundle.policy.optimizer.window_days)
+        rows = sorted((r for r in bundle.usage_rows if r.service == workload_id and cutoff <= r.timestamp <= now),
+                      key=lambda r: r.timestamp)
         extra["usage_series"] = [UsagePoint(t=r.timestamp, cpu=r.cpu_millicores, mem=r.memory_mib) for r in rows]
     if "events" in WorkloadResult.model_fields:
         extra["events"] = [
@@ -82,8 +88,19 @@ def run_analysis_with_bundle(
     for proposal in proposals:
         judged = runner.run("critic", evaluate, proposal, bundle, now)
         patched = runner.run("report", with_patch, judged, specs.get(proposal.workload_id))
-        extra = _chart_data(proposal.workload_id, bundle)
+        extra = _chart_data(proposal.workload_id, bundle, now)
         results.append(patched.model_copy(update=extra) if extra else patched)
+
+    results.sort(key=lambda result: -(result.proposal.priority_score or 0.0))
+    top_n = bundle.policy.critic.top_n_findings
+    top_opportunities = [TopOpportunity(
+        workload_id=result.workload_id,
+        monthly_savings_usd=result.monthly_savings_estimate_usd,
+        priority_score=result.proposal.priority_score or 0.0,
+        confidence_score=result.proposal.confidence.score if result.proposal.confidence else 0.0,
+        risk_level=result.risk_level,
+    ) for result in results if result.decision is DecisionStatus.APPROVED
+        and result.proposal.proposed is not None][:top_n]
 
     summary = AnalysisSummary(
         workloads_evaluated=len(results),
@@ -107,6 +124,11 @@ def run_analysis_with_bundle(
         summary=summary,
         results=results,
         warnings=warnings,
+        policy_version=bundle.policy.critic.version,
+        rule_version=bundle.policy.critic.rule_version,
+        input_fingerprint="sha256:" + hashlib.sha256(bundle.model_dump_json().encode("utf-8")).hexdigest(),
+        top_n_findings=top_n,
+        top_opportunities=top_opportunities,
     )
     if "input_issues" in AnalysisResponse.model_fields:
         payload["input_issues"] = bundle.issues
