@@ -19,14 +19,16 @@ router = APIRouter(prefix="/api", tags=["analysis"])
 
 
 class AnalyzeRequest(BaseModel):
-    """Body is optional. `scenario` is used by the UI's mock mode and ignored here."""
+    """Body is optional. `mode` determines if we use the deterministic pipeline or the agent.
+    `scenario` is used by the UI's mock mode and ignored here."""
     model_config = ConfigDict(extra="ignore")
     scenario: str = "all"
+    mode: str = "pipeline"  # "pipeline" | "agent"
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
 def analyze(_: AnalyzeRequest | None = None, svc: Services = Depends(get_services)) -> AnalysisResponse:
-    """Triggers the full FinOps analysis pipeline and returns structured results."""
+    """Triggers the deep FinOps Agent analysis and returns structured results."""
     with api_errors():
         return run_and_record(svc.store, inputs_fn=svc.inputs_fn, proposals_fn=svc.proposals_fn)
 

@@ -1,7 +1,8 @@
 """Optimizer unit tests on small synthetic data (no files, fixed clock)."""
 from datetime import datetime, timedelta, timezone
 
-from app.models.schemas import CostModel, InputBundle, OptimizerPolicy, Policy, UsageRow, WorkloadSpec
+from app.models.schemas import BusinessEvent, CostModel, DecisionStatus, InputBundle, OptimizerPolicy, Policy, RiskLevel, UsageRow, WorkloadSpec
+from app.services.critic_service import evaluate
 from app.services.optimizer_service import analyze_workload, build_proposals, percentile, round_up
 
 TZ = timezone(timedelta(hours=3))
@@ -101,6 +102,26 @@ def test_exactly_15_percent_below_is_proposed():
 def test_small_reduction_is_no_change():
     p = analyze_workload(workload(cpu=1000, mem=1100), rows(cpu=700, mem=800), now=NOW)  # 875 / 1040 > 85% of request
     assert p.status == "no_change" and "less than 15%" in " ".join(p.reasons)
+
+
+def test_active_event_is_deferred_when_projection_leaves_no_reduction_candidate():
+    svc = workload(cpu=1000, mem=1500)
+    event = BusinessEvent(
+        name="Month-End Reporting", start_at=NOW - timedelta(hours=1), end_at=NOW + timedelta(hours=1),
+        services=[svc.name], expected_traffic="high", risk="high", expected_load_multiplier=2.7,
+        freeze_optimization=True,
+    )
+    policy = Policy(simulation_now=NOW)
+    bundle = InputBundle(services=[svc], usage_rows=rows(cpu=500, mem=1000), events=[event],
+                         cost_model=COST, policy=policy)
+    proposal = analyze_workload(svc, bundle.usage_rows, policy.optimizer, NOW, COST, events=[event])
+    assert proposal.status == "no_change" and proposal.proposed is None
+
+    result = evaluate(proposal, bundle, NOW)
+    assert result.decision == DecisionStatus.DEFERRED
+    assert result.risk_level == RiskLevel.HIGH
+    assert "Month-End Reporting" in result.reason
+    assert any(check.code == "HIGH_IMPACT_EVENT" for check in result.checks)
 
 
 def test_without_cost_model_saving_is_zero():

@@ -12,7 +12,7 @@ DATA = Path(__file__).resolve().parents[2] / "data"
 
 def test_valid_fixture_loads():
     b = load_inputs(DATA)
-    assert len(b.services) == 10 and len(b.usage_rows) > 7000 and b.events and b.cost_model
+    assert len(b.services) == 12 and len(b.usage_rows) > 8500 and b.events and b.cost_model
     assert not any(issue.code == "MISSING_METRIC" for issue in b.issues)
 
 
