@@ -76,6 +76,9 @@ class AuditRecord(BaseModel):
     reviewer: str | None = None
     created_at: datetime
     outcome: str | None = None
+    rejection_reasons: list[str] = []     # structured human objections, replayed to the agent next run
+    resource: str | None = None           # which resource the objection targets, e.g. "memory"
+    reviewer_guidance: str | None = None  # free-form "do this instead" guidance from the reviewer
 
 
 class ExpiryResult(BaseModel):
@@ -109,6 +112,9 @@ class ReviewRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=2000)
     reviewer: str | None = Field(default=None, max_length=120)
     outcome: str | None = Field(default=None, max_length=80)
+    rejection_reasons: list[str] = Field(default_factory=list)
+    resource: str | None = Field(default=None, max_length=64)
+    reviewer_guidance: str | None = Field(default=None, max_length=2000)
 
 
 class DecisionDetail(BaseModel):

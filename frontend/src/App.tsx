@@ -112,6 +112,28 @@ export default function App() {
             </Badge>
           )}
           {state?.source === 'mock' && <ScenarioSwitcher value={scenario} onChange={setScenario} />}
+          <div className="flex items-center gap-1 rounded-lg border p-0.5 print:hidden" role="group" aria-label="Reasoning mode">
+            <Button
+              variant={mode === 'pipeline' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7"
+              aria-pressed={mode === 'pipeline'}
+              onClick={() => setMode('pipeline')}
+              title="Deterministic optimizer and critic. No language model involved."
+            >
+              Pipeline
+            </Button>
+            <Button
+              variant={mode === 'agent' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7"
+              aria-pressed={mode === 'agent'}
+              onClick={() => setMode('agent')}
+              title="Proposer, Critic and Judge review cycle with evidence-based confidence scoring."
+            >
+              Agent cycle
+            </Button>
+          </div>
           <div className="flex items-center gap-2 print:hidden">
             <Button variant="outline" size="icon" onClick={() => void exportReport('markdown')} disabled={!state} aria-label="Export report as Markdown" title="Export report (Markdown)"><FileDown /></Button>
             <Button variant="outline" size="icon" onClick={() => void exportReport('json')} disabled={!state} aria-label="Export audit data as JSON" title="Export audit data (JSON)"><FileJson2 /></Button>
@@ -162,7 +184,7 @@ export default function App() {
           <div className="grid items-start gap-6 lg:grid-cols-[1fr_440px]">
             <ResultsTable results={visible} selectedId={selectedId} onSelect={setSelectedId} />
             {isDesktop && (selected ? (
-              <DetailPanel key={selected.workload_id} result={selected} />
+              <DetailPanel key={selected.workload_id} result={selected} reportId={state.data.analysis_id} />
             ) : (
               <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">Select a workload to see evidence, the critic's audit trail and the proposed patch.</p>
             ))}
@@ -173,11 +195,11 @@ export default function App() {
         </>
       )}
 
-      {!isDesktop && selected && (
+      {!isDesktop && selected && state && (
         <>
           <div className="fixed inset-0 z-40 bg-black/50 animate-in fade-in" onClick={() => setSelectedId(null)} aria-hidden />
           <div role="dialog" aria-modal="true" aria-label={`${selected.workload_id} details`} className="fixed inset-x-0 bottom-0 z-50 max-h-[88vh] overflow-y-auto rounded-t-2xl animate-in slide-in-from-bottom duration-300 motion-reduce:animate-none print:hidden">
-            <DetailPanel key={selected.workload_id} result={selected} onClose={() => setSelectedId(null)} className="rounded-b-none rounded-t-2xl border-b-0 animate-none" />
+            <DetailPanel key={selected.workload_id} result={selected} reportId={state.data.analysis_id} onClose={() => setSelectedId(null)} className="rounded-b-none rounded-t-2xl border-b-0 animate-none" />
           </div>
         </>
       )}
