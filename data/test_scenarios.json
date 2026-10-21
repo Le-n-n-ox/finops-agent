@@ -1,0 +1,48 @@
+{
+  "scenarios": [
+    {
+      "id": "SCN-01",
+      "name": "Safe over-provisioning opportunity",
+      "workload": "image-resizer",
+      "expected_outcome": "recommend_small_reduction"
+    },
+    {
+      "id": "SCN-02",
+      "name": "Protected critical workload",
+      "workload": "payment-api",
+      "expected_outcome": "block"
+    },
+    {
+      "id": "SCN-03",
+      "name": "Active business event freeze",
+      "workload": "recommendation-api",
+      "timestamp": "2026-09-16T02:00:00Z",
+      "expected_outcome": "defer"
+    },
+    {
+      "id": "SCN-04",
+      "name": "Incident memory protection",
+      "workload": "session-store",
+      "timestamp": "2026-09-22T15:00:00Z",
+      "expected_outcome": "defer_or_block"
+    },
+    {
+      "id": "SCN-05",
+      "name": "Insufficient data",
+      "workload": "any",
+      "expected_outcome": "defer_insufficient_data"
+    },
+    {
+      "id": "SCN-06",
+      "name": "Maximum reduction cap",
+      "workload": "analytics-batch",
+      "expected_outcome": "block_or_clamp"
+    },
+    {
+      "id": "SCN-07",
+      "name": "Limits preservation",
+      "workload": "catalog-api",
+      "expected_outcome": "validation_error_if_limit_changed"
+    }
+  ]
+}

@@ -1,2 +1,8 @@
-incident_id,service,occurred_at,pattern,summary
-INC-2041,recommendation-api,2026-08-21T14:10:00+03:00,memory spike after model refresh,OOMKilled after nightly model refresh when memory request was reduced
+incident_id,timestamp,workload,namespace,incident_type,resource,peak_utilization_pct,summary,severity,recommended_guardrail,pattern_tag
+INC-001,2026-08-15T12:00:00Z,checkout-service,commerce,OOMKilled,memory,88,High traffic campaign pushed memory near container limit.,high,avoid memory reductions during campaign,campaign_spike
+INC-002,2026-08-21T03:30:00Z,recommendation-api,ml,OOMKilled,memory,95,Model refresh caused memory spike and pod restart.,critical,freeze memory reductions during model refresh,model_refresh
+INC-003,2026-08-26T10:10:00Z,payment-api,payments,LatencySLOBreach,cpu,91,CPU saturation correlated with payment latency breach.,high,protect CPU headroom,traffic_spike
+INC-004,2026-08-28T09:00:00Z,email-worker,jobs,QueueBacklog,cpu,84,Newsletter workload backlog caused delayed processing.,medium,avoid reductions during newsletter blast,newsletter_blast
+INC-005,2026-08-29T14:15:00Z,session-store,core,EvictionPressure,memory,89,Cache eviction rose after memory request was lowered in a previous test.,critical,block memory reduction,memory_reduction
+INC-006,2026-08-30T16:00:00Z,search-indexer,search,IndexLag,cpu,86,Indexer fell behind during partner launch traffic.,medium,avoid CPU reductions near partner launch,traffic_spike
+INC-007,2026-08-31T00:20:00Z,analytics-batch,analytics,JobDurationRegression,memory,82,Month-end job took 2.4x longer after resource reduction.,medium,freeze reductions during month-end,month_end
