@@ -129,8 +129,7 @@ export default function ReviewCyclePanel({ cycles, lessons }: { cycles?: ReviewC
   if (!cycles?.length) {
     return (
       <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-        No review cycle recorded. Run the analysis in <span className="font-medium">Agent cycle</span> mode to see the
-        Proposer, Critic and Judge reasoning.
+        No review cycle recorded. Run the analysis to see the Proposer, Critic and Judge reasoning.
       </p>
     )
   }

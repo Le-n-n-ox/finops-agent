@@ -1,31 +1,23 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect } from 'react'
 import { toast } from 'sonner'
-import { FileDown, FileJson2, Info, Lock, Printer, RefreshCw, ServerCog, TriangleAlert } from 'lucide-react'
-import { fetchDashboard, fetchEvents, fetchWorkloadRows, runAnalysis, type LoadResult } from '@/api'
-import type { DecisionStatus, DashboardSummary, EventRow, WorkloadRow } from '@/types'
+import { FileDown, FileJson2, History, Info, Lock, Printer, RefreshCw, ServerCog, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { buildReport, downloadText } from '@/lib/report'
-import { useMediaQuery } from '@/hooks/useMediaQuery'
 import AppToaster from '@/components/AppToaster'
 import ThemeToggle from '@/components/ThemeToggle'
 import ScenarioSwitcher from '@/components/ScenarioSwitcher'
-import Workflow from '@/components/Workflow'
-import InputStatus from '@/components/InputStatus'
-import SummaryCards from '@/components/SummaryCards'
-import DecisionDonut from '@/components/DecisionDonut'
-import SavingsChart from '@/components/SavingsChart'
-import SavingsPotential from '@/components/SavingsPotential'
-import TrendChart from '@/components/TrendChart'
-import EventTimeline from '@/components/EventTimeline'
-import PolicyPanel from '@/components/PolicyPanel'
-import DecisionHistory from '@/components/DecisionHistory'
 import ProvenanceStrip from '@/components/ProvenanceStrip'
-import ResultsTable from '@/components/ResultsTable'
-import DetailPanel from '@/components/DetailPanel'
-import DetailSheet from '@/components/DetailSheet'
+import { useAnalysis } from '@/state/analysis-context'
+import { useRouter } from '@/state/router-context'
+import type { AnalysisResponse } from '@/types'
+import Overview from '@/pages/Overview'
+import Workloads from '@/pages/Workloads'
+import Evidence from '@/pages/Evidence'
+import PolicyPage from '@/pages/PolicyPage'
+import HistoryPage from '@/pages/HistoryPage'
 
 function LoadingSkeleton() {
   return (
@@ -33,68 +25,62 @@ function LoadingSkeleton() {
       <Skeleton className="h-20" />
       <Skeleton className="h-32" />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-24" />)}</div>
-      <div className="grid gap-6 md:grid-cols-2"><Skeleton className="h-56" /><Skeleton className="h-56" /></div>
       <Skeleton className="h-64" />
     </div>
   )
 }
 
-/** The backend reports "demo" when the fixed demo clock is in use. Say what it means. */
-const MODE_LABEL: Record<string, string> = {
-  agent: 'agent cycle',
-  demo: 'deterministic pipeline',
-  pipeline: 'deterministic pipeline',
+/**
+ * What ran, said in words the reader can act on.
+ *
+ * The badge must never imply a language model ran when it did not: a reviewer who believes a
+ * model was called reads a different kind of trust into the objections than the code supports.
+ * So the live case names the model, and the stand-in case says so plainly.
+ *
+ * Three outcomes, not two, because "the stand-in answered" and "nothing is recorded about
+ * which reasoner answered" are different facts. A report stored before the field existed, and
+ * the bundled mock fixtures, have no `llm_backend` at all - neither of them is a stand-in run,
+ * and neither may be described as one.
+ */
+function modelBadge(data: AnalysisResponse): { text: string; live: boolean; title: string } {
+  if (data.llm_backend === 'openai-compatible') {
+    return {
+      text: data.llm_model ?? 'live model',
+      live: true,
+      title: `Language model ${data.llm_model ?? ''} answered the agent turns.`.trim(),
+    }
+  }
+  if (data.llm_backend === 'simulated') {
+    return {
+      text: 'no live model (deterministic stand-in)',
+      live: false,
+      title: 'The model server was not reachable, so the deterministic stand-in answered the agent turns. No language model ran.',
+    }
+  }
+  return {
+    text: 'no live model (not recorded)',
+    live: false,
+    title: 'This response does not record which reasoner answered, so no language model is claimed to have run.',
+  }
 }
 
+/**
+ * The one reasoning path. The response's `mode` field still describes the run (for example
+ * "demo" when the fixed demo clock is in use), but the path itself is always the agent cycle.
+ */
+const REASONING_PATH = 'agent cycle'
+
+const PAGES = [
+  { path: '/', label: 'Overview', icon: ShieldCheck },
+  { path: '/workloads', label: 'Workloads', icon: ServerCog },
+  { path: '/evidence', label: 'Evidence', icon: Info },
+  { path: '/policy', label: 'Policy', icon: Lock },
+  { path: '/history', label: 'History', icon: History },
+] as const
+
 export default function App() {
-  const [state, setState] = useState<LoadResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [scenario, setScenario] = useState('all')
-  const [mode, setMode] = useState<'pipeline' | 'agent'>('pipeline')
-  const [filter, setFilter] = useState<DecisionStatus | 'all'>('all')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [view, setView] = useState<'analysis' | 'policy' | 'history'>('analysis')
-  const [dashboard, setDashboard] = useState<DashboardSummary | null>(null)
-  const [events, setEvents] = useState<EventRow[] | null>(null)
-  const [workloadRows, setWorkloadRows] = useState<WorkloadRow[] | null>(null)
-  const isDesktop = useMediaQuery('(min-width: 1024px)')
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await runAnalysis(scenario, mode)
-      setState(res)
-      setFilter('all')
-      // single-workload scenarios open their detail straight away (demo flow)
-      setSelectedId(res.data.results.length === 1 ? res.data.results[0].workload_id : null)
-      // History and events come from separate endpoints. A failure there must not fail the page, but
-      // it must not leave the previous run's numbers on screen either: a stale trend is worse than
-      // no trend, because it looks current.
-      void fetchDashboard().then((d) => setDashboard(d.data))
-      void fetchEvents().then((e) => setEvents(e.data))
-      void fetchWorkloadRows().then((w) => setWorkloadRows(w.data))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load analysis')
-    } finally {
-      setLoading(false)
-    }
-  }, [scenario, mode])
-
-  useEffect(() => { void load() }, [load])
-
-  const visible = useMemo(
-    () => (state?.data.results ?? []).filter((r) => filter === 'all' || r.decision === filter),
-    [state, filter],
-  )
-  const selected = state?.data.results.find((r) => r.workload_id === selectedId) ?? null
-
-  // The what-if needs a stored report on the backend to re-decide against. Offline it cannot run,
-  // and saying so is better than a raw error toast.
-  const simulatorUnavailable = state?.source === 'mock'
-    ? 'The what-if needs the backend to re-run the critic, so it is unavailable while the app is running on mock data.'
-    : undefined
+  const { state, error, loading, scenario, setScenario, reload, llmStatus } = useAnalysis()
+  const { path, navigate } = useRouter()
 
   const exportReport = async (format: 'markdown' | 'json') => {
     if (!state) return
@@ -119,6 +105,34 @@ export default function App() {
     }
   }
 
+  // An unknown path is a stale link, not an error: send it to the overview rather than a 404.
+  const known = PAGES.some((p) => p.path === path)
+  const active = known ? path : '/'
+
+  useEffect(() => {
+    if (!known) navigate('/', { replace: true })
+  }, [known, navigate])
+
+  // The badge names what actually ran. It must never imply a language model ran when it did not:
+  // a reviewer who believes a model was called reads a different kind of trust into the
+  // objections than the code supports.
+  const badge = state
+    ? state.source === 'api'
+      ? (() => {
+          const m = modelBadge(state.data)
+          return { text: `Live API · ${REASONING_PATH} · ${m.text}`, live: m.live, title: m.title }
+        })()
+      : { text: 'Mock data · API offline · no live model', live: false, title: 'Bundled fixtures, not a backend run.' }
+    : llmStatus
+      ? {
+          text: llmStatus.backend === 'openai-compatible'
+            ? `Model server · ${llmStatus.model ?? 'live model'}`
+            : 'Model server unavailable · deterministic stand-in',
+          live: llmStatus.backend === 'openai-compatible',
+          title: llmStatus.detail ?? 'The model server has not been contacted yet.',
+        }
+      : null
+
   return (
     <div className="mx-auto max-w-7xl space-y-6 px-4 py-8">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -131,42 +145,26 @@ export default function App() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="outline"><Lock aria-hidden />Recommendation-only</Badge>
-          {state && (
-            <Badge variant="outline" className={cn(state.source === 'api' && 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300')}>
-              {state.source === 'api'
-                ? `Live API · ${MODE_LABEL[state.data.mode] ?? state.data.mode}`
-                : 'Mock data · API offline'}
+          {badge && (
+            <Badge
+              variant="outline"
+              className={cn(
+                badge.live
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300'
+                  : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200',
+              )}
+              title={badge.title}
+            >
+              {badge.text}
             </Badge>
           )}
           {state?.source === 'mock' && <ScenarioSwitcher value={scenario} onChange={setScenario} />}
-          <div className="flex items-center gap-1 rounded-lg border p-0.5 print:hidden" role="group" aria-label="Reasoning mode">
-            <Button
-              variant={mode === 'pipeline' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7"
-              aria-pressed={mode === 'pipeline'}
-              onClick={() => setMode('pipeline')}
-              title="Deterministic optimizer and critic. No language model involved."
-            >
-              Pipeline
-            </Button>
-            <Button
-              variant={mode === 'agent' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7"
-              aria-pressed={mode === 'agent'}
-              onClick={() => setMode('agent')}
-              title="Proposer, Critic and Judge review cycle with evidence-based confidence scoring."
-            >
-              Agent cycle
-            </Button>
-          </div>
           <div className="flex items-center gap-2 print:hidden">
             <Button variant="outline" size="icon" onClick={() => void exportReport('markdown')} disabled={!state} aria-label="Export report as Markdown" title="Export report (Markdown)"><FileDown /></Button>
             <Button variant="outline" size="icon" onClick={() => void exportReport('json')} disabled={!state} aria-label="Export audit data as JSON" title="Export audit data (JSON)"><FileJson2 /></Button>
             <Button variant="outline" size="icon" onClick={() => window.print()} disabled={!state} aria-label="Print or save as PDF" title="Print / save as PDF"><Printer /></Button>
             <ThemeToggle />
-            <Button onClick={() => void load()} disabled={loading}>
+            <Button onClick={() => void reload()} disabled={loading}>
               <RefreshCw className={cn(loading && 'animate-spin')} aria-hidden />{loading ? 'Running…' : 'Run analysis'}
             </Button>
           </div>
@@ -180,91 +178,50 @@ export default function App() {
       )}
       {loading && !state && <LoadingSkeleton />}
 
+      {/*
+        The navigation is outside the analysis block on purpose. Policy and History do not need
+        an analysis - the policy editor fetches its own policy and the history page its own
+        decisions - so a failed analysis must not take them out of reach. The pages that do need
+        the analysis already render nothing when it is missing.
+      */}
+      <nav className="flex flex-wrap gap-1 border-b print:hidden" aria-label="Sections">
+        {PAGES.map(({ path: to, label, icon: Icon }) => (
+          <button
+            key={to}
+            onClick={() => navigate(to)}
+            aria-current={active === to ? 'page' : undefined}
+            className={cn(
+              'flex items-center gap-1.5 px-3 py-2 text-sm font-medium -mb-px border-b-2 transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+              active === to ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+          >
+            <Icon className="size-4" aria-hidden />{label}
+          </button>
+        ))}
+      </nav>
+
       {state && (
         <>
-          <nav className="flex gap-1 border-b print:hidden" aria-label="Sections">
-            {([['analysis', 'Analysis'], ['policy', 'Policy'], ['history', 'History']] as const).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setView(key)}
-                aria-current={view === key ? 'page' : undefined}
-                className={cn(
-                  'px-3 py-2 text-sm font-medium -mb-px border-b-2 transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
-                  view === key ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
+          <ProvenanceStrip data={state.data} source={state.source} />
 
-          {view === 'policy' ? (
-            <PolicyPanel onSaved={() => void load()} />
-          ) : view === 'history' ? (
-            <DecisionHistory />
-          ) : (
-            <>
           {state.data.warnings.map((w) => (
             <p key={w} className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
               <Info className="size-4 shrink-0" aria-hidden />{w}
             </p>
           ))}
-          <ProvenanceStrip data={state.data} />
-          <Workflow data={state.data} />
-          <InputStatus data={state.data} />
-          <SummaryCards summary={state.data.summary} active={filter} onFilter={setFilter} />
-          {!!state.data.top_opportunities?.length && <section className="rounded-xl border bg-card p-4" aria-label="Top ranked opportunities">
-            <div className="mb-3 flex items-baseline justify-between gap-3">
-              <h2 className="font-semibold">Top opportunities</h2>
-              <span className="text-xs text-muted-foreground">Ranked from approved recommendations · top {state.data.top_n_findings ?? 5}</span>
-            </div>
-            <ol className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-              {state.data.top_opportunities.map((item, index) => <li key={item.workload_id} className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">#{index + 1} · priority {item.priority_score.toFixed(2)}</p>
-                <p className="font-medium">{item.workload_id}</p>
-                <p className="text-sm">${item.monthly_savings_usd.toFixed(2)} / month</p>
-                <p className="text-xs text-muted-foreground">{item.confidence_score.toFixed(0)}% confidence · {item.risk_level} risk</p>
-              </li>)}
-            </ol>
-          </section>}
-          <SavingsPotential results={state.data.results} />
-          <div className="grid gap-6 md:grid-cols-2">
-            <DecisionDonut summary={state.data.summary} active={filter} onFilter={setFilter} />
-            <SavingsChart results={state.data.results} />
-          </div>
-          <div className="grid gap-6 lg:grid-cols-2">
-            <TrendChart trend={dashboard?.trend ?? []} />
-            <EventTimeline events={events ?? []} now={state.data.generated_at} />
-          </div>
-          <div className="grid items-start gap-6 lg:grid-cols-[1fr_440px]">
-            <ResultsTable results={visible} selectedId={selectedId} onSelect={setSelectedId} workloadRows={workloadRows} />
-            {isDesktop && (selected ? (
-              <DetailPanel
-                key={selected.workload_id}
-                result={selected}
-                reportId={state.data.analysis_id}
-                simulatorUnavailable={simulatorUnavailable}
-              />
-            ) : (
-              <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">Select a workload to see evidence, the critic's audit trail and the proposed patch.</p>
-            ))}
-          </div>
-          <footer className="border-t pt-4 text-xs text-muted-foreground">
-            Prototype using local/mock data. Savings are illustrative estimates, not guaranteed bill reductions. Every change requires human approval; nothing is applied to a cluster.
-          </footer>
-            </>
-          )}
         </>
       )}
 
-      {!isDesktop && selected && state && (
-        <DetailSheet
-          result={selected}
-          reportId={state.data.analysis_id}
-          onClose={() => setSelectedId(null)}
-          simulatorUnavailable={simulatorUnavailable}
-        />
-      )}
+      {active === '/' && <Overview />}
+      {active === '/workloads' && <Workloads />}
+      {active === '/evidence' && <Evidence />}
+      {active === '/policy' && <PolicyPage />}
+      {active === '/history' && <HistoryPage />}
+
+      <footer className="border-t pt-4 text-xs text-muted-foreground">
+        Prototype using local/mock data. Savings are illustrative estimates, not guaranteed bill reductions. Every change requires human approval; nothing is applied to a cluster.
+      </footer>
+
       <AppToaster />
     </div>
   )
