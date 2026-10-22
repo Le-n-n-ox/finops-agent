@@ -1,31 +1,54 @@
-import { CalendarClock, FileCode2, LineChart, TriangleAlert, CheckCircle2, type LucideIcon } from 'lucide-react'
+import { CalendarClock, FileCode2, LineChart, TriangleAlert, CheckCircle2, Database, type LucideIcon } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import type { AnalysisResponse } from '@/types'
 
 interface Source { icon: LucideIcon; name: string; value: string; note: string; warn: boolean }
 
-/** Derived from the analysis result (the API does not yet report per-file status). */
+/**
+ * What the analysis was actually built from.
+ *
+ * The counts come from the analysis itself and from the validation pass the backend attaches
+ * (`data_health`), not from hard-coded file names: the same code runs against a remote metrics
+ * source, where there is no CSV on disk. So the source is named from the data and the health
+ * figures are the ones the validator reported.
+ */
 function deriveSources(d: AnalysisResponse): Source[] {
   const namespaces = new Set(d.results.map((r) => r.namespace)).size
   const samples = d.results.reduce((n, r) => n + r.proposal.metrics.sample_count, 0)
-  const weak = d.results.filter(
-    (r) => r.proposal.status === 'needs_review' || r.checks.some((c) => c.name === 'metrics_completeness' && c.status === 'triggered'),
-  ).length
+  const health = d.data_health
+  const unhealthy = health?.workloads.filter((w) => w.status !== 'healthy').length ?? 0
   const inEvent = d.results.filter((r) => r.checks.some((c) => c.name === 'event_window' && c.status === 'triggered')).length
+  const source = health?.source === 'zetaris' ? 'Zetaris metrics' : health?.source === 'local_fallback' ? 'Local files (remote fell back)' : 'Local files'
   return [
-    { icon: FileCode2, name: 'Deployment YAML', value: `${d.results.length} workloads`, note: `${namespaces} namespaces`, warn: false },
-    { icon: LineChart, name: 'Usage CSV', value: `${samples.toLocaleString()} samples`, note: weak ? `${weak} with missing/stale metrics` : 'All workloads have enough data', warn: weak > 0 },
-    { icon: CalendarClock, name: 'Events JSON', value: `${inEvent} in an event window`, note: inEvent ? 'Reductions near events are challenged' : 'No upcoming events affect these workloads', warn: false },
+    { icon: FileCode2, name: 'Deployments', value: `${d.results.length} workloads`, note: `${namespaces} namespaces · ${source}`, warn: false },
+    {
+      icon: LineChart,
+      name: 'Usage metrics',
+      value: `${samples.toLocaleString()} samples`,
+      note: health
+        ? unhealthy
+          ? `${unhealthy} of ${health.workloads_checked} workloads have missing, sparse or stale metrics`
+          : `All ${health.workloads_checked} workloads have enough data`
+        : 'No validation report attached to this run',
+      warn: unhealthy > 0,
+    },
+    { icon: CalendarClock, name: 'Business events', value: `${inEvent} in an event window`, note: inEvent ? 'Reductions near events are challenged' : 'No upcoming events affect these workloads', warn: false },
   ]
 }
 
 export default function InputStatus({ data }: { data: AnalysisResponse }) {
   const issues = data.input_issues ?? []
+  const health = data.data_health
   return (
     <Card>
       <CardHeader>
         <CardTitle>Input status</CardTitle>
-        <CardDescription>Data sources behind this analysis</CardDescription>
+        <CardDescription>
+          Data sources behind this analysis
+          {health && (
+            <> · <span className="inline-flex items-center gap-1"><Database className="size-3" aria-hidden />{health.source}</span></>
+          )}
+        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3 sm:grid-cols-3">
         {deriveSources(data).map(({ icon: Icon, name, value, note, warn }) => (
@@ -53,7 +76,7 @@ export default function InputStatus({ data }: { data: AnalysisResponse }) {
             ))}
           </ul>
         )}
-        {data.data_health?.workloads.map((workload) => (
+        {health?.workloads.map((workload) => (
           <div key={workload.workload_id} className="rounded-md border bg-background px-3 py-2 text-sm">
             <p className="font-medium">
               {workload.workload_id} <span className={workload.status === 'healthy' ? 'text-emerald-600' : workload.status === 'error' ? 'text-red-600' : 'text-amber-600'}>· {workload.status}</span>

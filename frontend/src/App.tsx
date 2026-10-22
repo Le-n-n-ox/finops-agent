@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { FileDown, FileJson2, Info, Lock, Printer, RefreshCw, ServerCog, TriangleAlert } from 'lucide-react'
-import { runAnalysis, type LoadResult } from '@/api'
-import type { DecisionStatus } from '@/types'
+import { fetchDashboard, fetchEvents, fetchWorkloadRows, runAnalysis, type LoadResult } from '@/api'
+import type { DecisionStatus, DashboardSummary, EventRow, WorkloadRow } from '@/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -17,8 +17,15 @@ import InputStatus from '@/components/InputStatus'
 import SummaryCards from '@/components/SummaryCards'
 import DecisionDonut from '@/components/DecisionDonut'
 import SavingsChart from '@/components/SavingsChart'
+import SavingsPotential from '@/components/SavingsPotential'
+import TrendChart from '@/components/TrendChart'
+import EventTimeline from '@/components/EventTimeline'
+import PolicyPanel from '@/components/PolicyPanel'
+import DecisionHistory from '@/components/DecisionHistory'
+import ProvenanceStrip from '@/components/ProvenanceStrip'
 import ResultsTable from '@/components/ResultsTable'
 import DetailPanel from '@/components/DetailPanel'
+import DetailSheet from '@/components/DetailSheet'
 
 function LoadingSkeleton() {
   return (
@@ -32,6 +39,13 @@ function LoadingSkeleton() {
   )
 }
 
+/** The backend reports "demo" when the fixed demo clock is in use. Say what it means. */
+const MODE_LABEL: Record<string, string> = {
+  agent: 'agent cycle',
+  demo: 'deterministic pipeline',
+  pipeline: 'deterministic pipeline',
+}
+
 export default function App() {
   const [state, setState] = useState<LoadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -40,6 +54,10 @@ export default function App() {
   const [mode, setMode] = useState<'pipeline' | 'agent'>('pipeline')
   const [filter, setFilter] = useState<DecisionStatus | 'all'>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [view, setView] = useState<'analysis' | 'policy' | 'history'>('analysis')
+  const [dashboard, setDashboard] = useState<DashboardSummary | null>(null)
+  const [events, setEvents] = useState<EventRow[] | null>(null)
+  const [workloadRows, setWorkloadRows] = useState<WorkloadRow[] | null>(null)
   const isDesktop = useMediaQuery('(min-width: 1024px)')
 
   const load = useCallback(async () => {
@@ -51,6 +69,12 @@ export default function App() {
       setFilter('all')
       // single-workload scenarios open their detail straight away (demo flow)
       setSelectedId(res.data.results.length === 1 ? res.data.results[0].workload_id : null)
+      // History and events come from separate endpoints. A failure there must not fail the page, but
+      // it must not leave the previous run's numbers on screen either: a stale trend is worse than
+      // no trend, because it looks current.
+      void fetchDashboard().then((d) => setDashboard(d.data))
+      void fetchEvents().then((e) => setEvents(e.data))
+      void fetchWorkloadRows().then((w) => setWorkloadRows(w.data))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load analysis')
     } finally {
@@ -60,26 +84,27 @@ export default function App() {
 
   useEffect(() => { void load() }, [load])
 
-  useEffect(() => {
-    if (isDesktop || !selectedId) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSelectedId(null) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [isDesktop, selectedId])
-
   const visible = useMemo(
     () => (state?.data.results ?? []).filter((r) => filter === 'all' || r.decision === filter),
     [state, filter],
   )
   const selected = state?.data.results.find((r) => r.workload_id === selectedId) ?? null
 
+  // The what-if needs a stored report on the backend to re-decide against. Offline it cannot run,
+  // and saying so is better than a raw error toast.
+  const simulatorUnavailable = state?.source === 'mock'
+    ? 'The what-if needs the backend to re-run the critic, so it is unavailable while the app is running on mock data.'
+    : undefined
+
   const exportReport = async (format: 'markdown' | 'json') => {
     if (!state) return
     const extension = format === 'markdown' ? 'md' : 'json'
-    const filename = `finops-audit-report.${extension}`
+    const filename = `finops-audit-report-${state.data.analysis_id}.${extension}`
     try {
+      // Export the analysis that is ON SCREEN. Fetching a fresh report would hand the reviewer a
+      // document describing a run they never looked at, which defeats the point of an audit trail.
       if (state.source === 'api') {
-        const response = await fetch(`/api/report?format=${format}`)
+        const response = await fetch(`/api/report?format=${format}&report_id=${encodeURIComponent(state.data.analysis_id)}`)
         if (!response.ok) throw new Error(`Report API ${response.status}`)
         const content = format === 'markdown' ? await response.text() : JSON.stringify(await response.json(), null, 2)
         downloadText(filename, content, format === 'markdown' ? 'text/markdown' : 'application/json')
@@ -108,10 +133,34 @@ export default function App() {
           <Badge variant="outline"><Lock aria-hidden />Recommendation-only</Badge>
           {state && (
             <Badge variant="outline" className={cn(state.source === 'api' && 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300')}>
-              {state.source === 'api' ? `Live API · ${state.data.mode}` : 'Mock data · API offline'}
+              {state.source === 'api'
+                ? `Live API · ${MODE_LABEL[state.data.mode] ?? state.data.mode}`
+                : 'Mock data · API offline'}
             </Badge>
           )}
           {state?.source === 'mock' && <ScenarioSwitcher value={scenario} onChange={setScenario} />}
+          <div className="flex items-center gap-1 rounded-lg border p-0.5 print:hidden" role="group" aria-label="Reasoning mode">
+            <Button
+              variant={mode === 'pipeline' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7"
+              aria-pressed={mode === 'pipeline'}
+              onClick={() => setMode('pipeline')}
+              title="Deterministic optimizer and critic. No language model involved."
+            >
+              Pipeline
+            </Button>
+            <Button
+              variant={mode === 'agent' ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7"
+              aria-pressed={mode === 'agent'}
+              onClick={() => setMode('agent')}
+              title="Proposer, Critic and Judge review cycle with evidence-based confidence scoring."
+            >
+              Agent cycle
+            </Button>
+          </div>
           <div className="flex items-center gap-2 print:hidden">
             <Button variant="outline" size="icon" onClick={() => void exportReport('markdown')} disabled={!state} aria-label="Export report as Markdown" title="Export report (Markdown)"><FileDown /></Button>
             <Button variant="outline" size="icon" onClick={() => void exportReport('json')} disabled={!state} aria-label="Export audit data as JSON" title="Export audit data (JSON)"><FileJson2 /></Button>
@@ -133,11 +182,34 @@ export default function App() {
 
       {state && (
         <>
+          <nav className="flex gap-1 border-b print:hidden" aria-label="Sections">
+            {([['analysis', 'Analysis'], ['policy', 'Policy'], ['history', 'History']] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setView(key)}
+                aria-current={view === key ? 'page' : undefined}
+                className={cn(
+                  'px-3 py-2 text-sm font-medium -mb-px border-b-2 transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
+                  view === key ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+
+          {view === 'policy' ? (
+            <PolicyPanel onSaved={() => void load()} />
+          ) : view === 'history' ? (
+            <DecisionHistory />
+          ) : (
+            <>
           {state.data.warnings.map((w) => (
             <p key={w} className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
               <Info className="size-4 shrink-0" aria-hidden />{w}
             </p>
           ))}
+          <ProvenanceStrip data={state.data} />
           <Workflow data={state.data} />
           <InputStatus data={state.data} />
           <SummaryCards summary={state.data.summary} active={filter} onFilter={setFilter} />
@@ -155,14 +227,24 @@ export default function App() {
               </li>)}
             </ol>
           </section>}
+          <SavingsPotential results={state.data.results} />
           <div className="grid gap-6 md:grid-cols-2">
             <DecisionDonut summary={state.data.summary} active={filter} onFilter={setFilter} />
             <SavingsChart results={state.data.results} />
           </div>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <TrendChart trend={dashboard?.trend ?? []} />
+            <EventTimeline events={events ?? []} now={state.data.generated_at} />
+          </div>
           <div className="grid items-start gap-6 lg:grid-cols-[1fr_440px]">
-            <ResultsTable results={visible} selectedId={selectedId} onSelect={setSelectedId} />
+            <ResultsTable results={visible} selectedId={selectedId} onSelect={setSelectedId} workloadRows={workloadRows} />
             {isDesktop && (selected ? (
-              <DetailPanel key={selected.workload_id} result={selected} />
+              <DetailPanel
+                key={selected.workload_id}
+                result={selected}
+                reportId={state.data.analysis_id}
+                simulatorUnavailable={simulatorUnavailable}
+              />
             ) : (
               <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">Select a workload to see evidence, the critic's audit trail and the proposed patch.</p>
             ))}
@@ -170,16 +252,18 @@ export default function App() {
           <footer className="border-t pt-4 text-xs text-muted-foreground">
             Prototype using local/mock data. Savings are illustrative estimates, not guaranteed bill reductions. Every change requires human approval; nothing is applied to a cluster.
           </footer>
+            </>
+          )}
         </>
       )}
 
-      {!isDesktop && selected && (
-        <>
-          <div className="fixed inset-0 z-40 bg-black/50 animate-in fade-in" onClick={() => setSelectedId(null)} aria-hidden />
-          <div role="dialog" aria-modal="true" aria-label={`${selected.workload_id} details`} className="fixed inset-x-0 bottom-0 z-50 max-h-[88vh] overflow-y-auto rounded-t-2xl animate-in slide-in-from-bottom duration-300 motion-reduce:animate-none print:hidden">
-            <DetailPanel key={selected.workload_id} result={selected} onClose={() => setSelectedId(null)} className="rounded-b-none rounded-t-2xl border-b-0 animate-none" />
-          </div>
-        </>
+      {!isDesktop && selected && state && (
+        <DetailSheet
+          result={selected}
+          reportId={state.data.analysis_id}
+          onClose={() => setSelectedId(null)}
+          simulatorUnavailable={simulatorUnavailable}
+        />
       )}
       <AppToaster />
     </div>

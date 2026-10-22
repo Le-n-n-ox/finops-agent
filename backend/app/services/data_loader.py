@@ -15,6 +15,89 @@ from typing import Any, Callable, TypeVar
 import yaml
 from pydantic import BaseModel, ValidationError
 
+# Simulated Intelligence Data
+# ---------------------------------------------------------------------------
+# The agent needs to answer questions that usage metrics alone cannot: is this spike
+# recurring, is the container already being OOMKilled, does an upstream dependency
+# carry load for this service? A production deployment would query a log store and a
+# service catalogue; this demo uses a small static fixture keyed by workload id.
+#
+# `search_logs` filters these by workload and (optionally) by a keyword or level, so the
+# agent can ask a narrower question than "show me everything".
+
+_SIMULATED_LOGS: dict[str, list[dict[str, Any]]] = {
+    "payment-api": [
+        {"timestamp": "2026-08-15T12:00:00Z", "level": "ERROR", "workload_id": "payment-api",
+         "message": "Memory limit reached. Container OOMKilled."},
+        {"timestamp": "2026-08-15T12:05:00Z", "level": "WARN", "workload_id": "payment-api",
+         "message": "CPU throttling detected; latency increasing."},
+        {"timestamp": "2026-09-08T09:40:00Z", "level": "WARN", "workload_id": "payment-api",
+         "message": "CPU throttling detected during Autumn Campaign."},
+    ],
+    "checkout-service": [
+        {"timestamp": "2026-08-15T12:02:00Z", "level": "ERROR", "workload_id": "checkout-service",
+         "message": "Memory limit reached. Container OOMKilled."},
+    ],
+    "recommendation-api": [
+        {"timestamp": "2026-08-21T03:30:00Z", "level": "ERROR", "workload_id": "recommendation-api",
+         "message": "Memory limit reached. Container OOMKilled during model refresh."},
+    ],
+    "session-store": [
+        {"timestamp": "2026-08-29T14:15:00Z", "level": "ERROR", "workload_id": "session-store",
+         "message": "Cache eviction pressure; container OOMKilled after request reduction."},
+    ],
+    "email-worker": [
+        {"timestamp": "2026-08-28T09:00:00Z", "level": "WARN", "workload_id": "email-worker",
+         "message": "Queue backlog growing; CPU throttling observed."},
+    ],
+    "search-indexer": [
+        {"timestamp": "2026-08-30T16:00:00Z", "level": "WARN", "workload_id": "search-indexer",
+         "message": "Index lag rising; CPU throttling observed."},
+    ],
+    "auth-service": [
+        {"timestamp": "2026-10-01T12:00:00Z", "level": "INFO", "workload_id": "auth-service",
+         "message": "Health check passed."},
+    ],
+}
+
+_SIMULATED_DEPENDENCIES: dict[str, list[str]] = {
+    "payment-api": ["auth-service", "catalog-api"],
+    "checkout-service": ["payment-api", "catalog-api"],
+    "catalog-api": ["auth-service"],
+    "auth-service": [],
+    "session-store": ["auth-service"],
+    "recommendation-api": ["analytics-batch"],
+    "email-worker": [],
+    "image-resizer": [],
+    "analytics-batch": ["catalog-api"],
+    "search-indexer": ["catalog-api"],
+    "docs-renderer": [],
+    "queue-cleaner": [],
+}
+
+
+def get_logs(workload_id: str, keyword: str | None = None, level: str | None = None) -> list[dict[str, Any]]:
+    """Retrieve simulated log entries for a workload, optionally narrowed by keyword and level.
+
+    The agent uses this to answer "is the container already under pressure?" which usage
+    percentiles alone cannot show. An unknown workload returns an empty list rather than
+    raising, so a missing log source never aborts an analysis.
+    """
+    entries = _SIMULATED_LOGS.get(workload_id, [])
+    if keyword:
+        needle = keyword.lower()
+        entries = [entry for entry in entries if needle in str(entry.get("message", "")).lower()]
+    if level:
+        wanted = level.lower()
+        entries = [entry for entry in entries if str(entry.get("level", "")).lower() == wanted]
+    return [dict(entry) for entry in entries]
+
+
+def get_dependencies(workload_id: str) -> list[str]:
+    """Retrieve the services a workload depends on (its upstream), for pressure propagation checks."""
+    return list(_SIMULATED_DEPENDENCIES.get(workload_id, []))
+
+
 from app.integrations.zetaris_client import ZetarisClient
 from app.services.incident_service import normalize_incident_row
 from app.models.schemas import (

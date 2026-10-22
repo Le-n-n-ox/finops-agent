@@ -351,6 +351,12 @@ class OptimizationProposal(BaseModel):
     priority_score: float | None = Field(default=None, ge=0)
     priority_breakdown: PriorityBreakdown | None = None
     findings: list[ResourceFinding] = Field(default_factory=list)
+    # What the critic suppressed. When an event, incident or policy exception blocks a reduction,
+    # the optimizer's candidate and its saving are moved here instead of being erased, so the
+    # reviewer can see what was found and what it cost to refuse it. Zero/None when nothing was
+    # suppressed.
+    suppressed_saving_usd: float = 0.0
+    suppressed_proposal: ResourceSettings | None = None
 
 
 # --------------------------------------------------------------------------- Developer 2 output
@@ -360,6 +366,33 @@ class CriticCheck(BaseModel):
     status: CheckStatus
     message: str
     evidence: dict[str, Any] = {}  # event id, usage window, incident id, computed floor ...
+
+
+class CriticObjection(BaseModel):
+    """One red-team objection raised by the adversarial Critic phase of the review cycle."""
+    code: str                        # stable code, e.g. "RECURRING_SPIKE_UNVERIFIED"
+    severity: str = "advisory"       # "blocking" | "advisory"
+    message: str
+    source: str | None = None        # the tool or evidence the objection is grounded in
+
+
+class ToolCall(BaseModel):
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    tool: str
+    params: Dict[str, Any]
+    result: Any
+    thought: Optional[str] = None
+
+
+class ReviewCycle(BaseModel):
+    """One phase of the Proposer -> Critic -> Judge cycle, kept separate so the reasoning is auditable."""
+    role: str                        # "proposer" | "critic" | "judge"
+    summary: str = ""
+    steps: List[ToolCall] = []
+    objections: List[CriticObjection] = []
+    verdict: str | None = None       # phase verdict, e.g. "escalate" | "accept"
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
 
 
 class UsagePoint(BaseModel):
@@ -383,6 +416,15 @@ class WorkloadResult(BaseModel):
     decision: DecisionStatus
     risk_level: RiskLevel
     reason: str
+    # The agent's verification confidence. None in pipeline mode, where no agent runs: a default
+    # of 0.0 would read as "the agent is certain of nothing" rather than "there was no agent".
+    # The proposal's own factor-based score lives in proposal.confidence.score.
+    confidence_score: float | None = Field(default=None, ge=0, le=100)
+    confidence_basis: str = ""   # how confidence_score was derived, in one line
+    evidence_trail: list[str] = Field(default_factory=list)
+    objections: list[CriticObjection] = []   # adversarial objections raised during the review cycle
+    cycles: list[ReviewCycle] = []           # proposer / critic / judge, in order (agent mode only)
+    historical_lessons: list[str] = []       # human rejections injected into the proposer's prompt
     checks: list[CriticCheck] = []
     proposal: OptimizationProposal
     monthly_savings_estimate_usd: float = 0.0
@@ -451,24 +493,22 @@ class TopOpportunity(BaseModel):
     risk_level: RiskLevel
 
 # --------------------------------------------------------------------------- Agent Schemas
-class ToolCall(BaseModel):
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    tool: str
-    params: Dict[str, Any]
-    result: Any
-    thought: Optional[str] = None
-
 class VerificationStep(BaseModel):
     claimed_value: str
     source_tool: Optional[str] = None
     status: str  # "verified" | "unverified"
 
+
 class AgentAuditLog(BaseModel):
     session_id: str
     workload_id: str
     steps: List[ToolCall] = []
+    cycles: List[ReviewCycle] = []           # proposer / critic / judge, in order
     final_decision: Optional[DecisionStatus] = None
     verification_report: List[VerificationStep] = []
+    confidence_score: float = Field(default=0.0, ge=0, le=100)
+    evidence_trail: List[str] = []
+    historical_lessons: List[str] = []       # human rejections injected into the proposer prompt
 
 class VerificationResult(BaseModel):
     is_valid: bool
