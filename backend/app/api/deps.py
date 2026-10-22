@@ -9,7 +9,7 @@ from typing import Callable, Iterator
 
 from fastapi import HTTPException
 
-from app.models.schemas import InputBundle, OptimizationProposal
+from app.models.schemas import InputBundle
 from app.services import orchestrator
 from app.services.store import Store
 
@@ -20,7 +20,6 @@ log = logging.getLogger(__name__)
 class Services:
     store: Store
     inputs_fn: Callable[[], InputBundle] = field(default=orchestrator.default_inputs)
-    proposals_fn: Callable[..., list[OptimizationProposal]] = field(default=orchestrator.default_proposals)
 
     def bundle(self) -> InputBundle:
         """Current inputs with any saved safety-policy override applied."""

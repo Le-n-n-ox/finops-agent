@@ -32,14 +32,30 @@ class AgentTool:
             return ToolResult(status="error", data=None, error=str(e))
 
 class AgentToolbox:
-    def __init__(self, bundle: InputBundle):
+    def __init__(self, bundle: InputBundle, workload_id: str | None = None):
         self.bundle = bundle
+        # The workload this toolbox is bound to, when it is bound to one.
+        #
+        # The model chooses which tool to call and with which workload id, and `validate_policy`
+        # judges the most recent `analyze_rightsizing` result. Unbound, that combination lets a
+        # model make one workload's review validate another workload's proposal - and publish
+        # that workload's verdict under the wrong name. A bound toolbox refuses the call, so the
+        # model cannot choose which proposal the safety check judges.
+        self.workload_id = workload_id
         self._tools: Dict[str, AgentTool] = {}
         # Every call is remembered so a later tool can refer to an earlier result. The agent
         # never has to round-trip a large object through the LLM, which is both lossy and a
         # hallucination risk.
         self._history: List[Dict[str, Any]] = []
         self._setup_tools()
+
+    def _require(self, workload_id: str) -> str:
+        """Refuse a call about a workload this toolbox is not reviewing."""
+        if self.workload_id is not None and workload_id != self.workload_id:
+            raise ValueError(
+                f"This review is about workload '{self.workload_id}'. Call the tool with "
+                f"workload_id='{self.workload_id}' - a review may not use another workload's data.")
+        return workload_id
 
     def _setup_tools(self):
         # The analysis clock. The demo fixes it in policy.yaml so results are repeatable; without
@@ -50,11 +66,13 @@ class AgentToolbox:
         # Tool: get_workload_metrics
         # Returns raw usage data for a specific workload
         def get_workload_metrics(workload_id: str, **kwargs) -> List[UsageRow]:
+            self._require(workload_id)
             return [row for row in self.bundle.usage_rows if row.service == workload_id]
 
         # Tool: analyze_rightsizing
         # Computes the optimal resource requests
         def analyze_rightsizing(workload_id: str, **kwargs) -> OptimizationProposal:
+            self._require(workload_id)
             spec = next((s for s in self.bundle.services if s.name == workload_id), None)
             if not spec:
                 raise ValueError(f"Workload {workload_id} not found.")
@@ -74,6 +92,7 @@ class AgentToolbox:
         # Tool: detect_risk_patterns
         # Identifies capacity and configuration risks
         def detect_risk_patterns(workload_id: str, **kwargs) -> List[Any]:
+            self._require(workload_id)
             spec = next((s for s in self.bundle.services if s.name == workload_id), None)
             if not spec:
                 raise ValueError(f"Workload {workload_id} not found.")
@@ -101,22 +120,32 @@ class AgentToolbox:
             if not isinstance(proposal, OptimizationProposal):
                 raise ValueError(
                     "No proposal to validate. Call 'analyze_rightsizing' first.")
+            if self.workload_id is not None and proposal.workload_id != self.workload_id:
+                # Belt and braces: the tools are already bound to one workload, so this cannot
+                # happen. It is checked anyway, because this is the step that decides the
+                # workload's verdict and a wrong proposal here is a wrong verdict published.
+                raise ValueError(
+                    f"The proposal on file is for workload '{proposal.workload_id}', not "
+                    f"'{self.workload_id}'. Call 'analyze_rightsizing' for this workload first.")
             return critic_service.evaluate(proposal, self.bundle)
 
         # Tool: get_incident_history
         # Retrieves incidents related to the workload
         def get_incident_history(workload_id: str, **kwargs) -> List[IncidentRecord]:
+            self._require(workload_id)
             return [inc for inc in self.bundle.incidents if inc.service == workload_id]
 
         # Tool: search_logs
         # Searches simulated logs for error patterns (OOM, Throttling)
         def search_logs(workload_id: str, keyword: str | None = None, level: str | None = None,
                         **kwargs) -> List[Dict[str, Any]]:
+            self._require(workload_id)
             return data_loader.get_logs(workload_id, keyword=keyword, level=level)
 
         # Tool: get_dependencies
         # Maps service dependencies to detect upstream pressure
         def get_dependencies(workload_id: str, **kwargs) -> List[str]:
+            self._require(workload_id)
             return data_loader.get_dependencies(workload_id)
 
         self.add_tool("get_workload_metrics", get_workload_metrics,

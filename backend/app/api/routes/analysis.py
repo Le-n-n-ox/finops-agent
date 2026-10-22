@@ -42,7 +42,7 @@ async def analyze(req: AnalyzeRequest | None = None, svc: Services = Depends(get
     with api_errors():
         # `mode` is deliberately not read: the agent cycle always runs.
         return await run_and_record(svc.store, mode=(req.mode if req else "agent"),
-                                    inputs_fn=svc.inputs_fn, proposals_fn=svc.proposals_fn)
+                                    inputs_fn=svc.inputs_fn)
 
 
 @router.get("/llm/status")
