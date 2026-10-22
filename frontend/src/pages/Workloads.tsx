@@ -30,6 +30,7 @@ export default function Workloads() {
   // query has to be cleared with it. Any other URL moved on its own: the back button, a pasted
   // link, a link from a colleague - and the selection follows it.
   const lastWritten = useRef<string | null>(null)
+  const analysisId = state?.data.analysis_id
 
   useEffect(() => {
     const param = new URLSearchParams(search).get('workload')
@@ -42,10 +43,7 @@ export default function Workloads() {
       return
     }
     if (param !== selectedId) setSelectedId(param)
-    // `selectedId` is deliberately not a dependency: this effect reacts to the URL moving, and
-    // a selection change is handled by the branch above. Adding it would make the two fight.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, navigate])
+  }, [search, selectedId, analysisId, navigate, setSelectedId])
 
   if (!state) return null
 
