@@ -276,6 +276,7 @@ async def run_analysis_agentic(
     now: datetime | None = None,
     llm_client: Any = None,
     llm_status: Dict[str, Any] | None = None,
+    on_workload: Callable[[WorkloadResult], None] | None = None,
     **kwargs
 ) -> tuple[AnalysisResponse, InputBundle]:
     """
@@ -288,6 +289,11 @@ async def run_analysis_agentic(
     The model client is resolved from the live model server when one is reachable. When it is not,
     the deterministic stand-in answers and the response says so: the UI must never imply a
     language model ran when it did not.
+
+    `on_workload` is called with each workload's result as it is finished. A full review of
+    every workload is a multi-turn conversation with the model server for each one, so the run
+    takes minutes - and a caller that cannot see it progressing has no way to tell a slow run
+    from a stuck one.
     """
     bundle = kwargs.get("bundle") or default_inputs()
     now = now or bundle.policy.simulation_now or datetime.now(timezone.utc)
@@ -329,7 +335,15 @@ async def run_analysis_agentic(
         # The usage chart and event band are UI-only fields. The agent path must attach them too,
         # or "Agent cycle" mode renders an empty chart where the pipeline shows 720 points.
         extra = _chart_data(spec.name, bundle, now)
-        results.append(patched.model_copy(update=extra) if extra else patched)
+        finished = patched.model_copy(update=extra) if extra else patched
+        results.append(finished)
+        if on_workload is not None:
+            # Reported as it is finished, so a caller can show the run progressing. A failure
+            # here must not sink the analysis: the progress callback is a convenience.
+            try:
+                on_workload(finished)
+            except Exception:  # noqa: BLE001 - a broken progress callback is not a broken analysis
+                logger.warning("The progress callback failed for %s.", spec.name, exc_info=True)
 
     results.sort(key=lambda result: -(result.proposal.priority_score or 0.0))
     return _aggregate(results, bundle, now, llm_status=llm_status, fallbacks=fallbacks,
@@ -434,5 +448,6 @@ async def _run_agentic_with_policy(store: Store, now: datetime | None = None, **
     if llm_client is None:
         llm_client, llm_status = resolve_llm()
     response, bundle = await run_analysis_agentic(now=now, llm_client=llm_client, llm_status=llm_status,
-                                                  bundle=bundle, store=store)
+                                                  bundle=bundle, store=store,
+                                                  on_workload=kwargs.get("on_workload"))
     return response, bundle

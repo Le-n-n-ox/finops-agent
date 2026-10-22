@@ -31,6 +31,12 @@ export interface AnalysisValue {
   setSelectedId: (id: string | null) => void
   /** Why the what-if cannot run, if it cannot. */
   simulatorUnavailable: string | undefined
+  /**
+   * How far the run has got: how many workloads are finished, how many there are, and when it
+   * started. A full analysis is a multi-turn conversation with the model server for every
+   * workload, so it takes minutes - this is what tells the reader it is working.
+   */
+  progress: { done: number; total: number; startedAt: number }
 }
 
 export const AnalysisContext = createContext<AnalysisValue | null>(null)
