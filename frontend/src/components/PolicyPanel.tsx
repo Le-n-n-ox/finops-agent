@@ -39,6 +39,33 @@ const inputClass =
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
+/**
+ * Whether a payload is a policy this editor can render completely.
+ *
+ * The editor reads every field the critic enforces, and there is no error boundary above it:
+ * a payload missing one of them - a partial response, or a policy written by an older
+ * version - would throw during render and take the whole app down with it, including the
+ * navigation. A policy the editor cannot show in full is not worth showing half of, so an
+ * incomplete one is treated as unavailable.
+ */
+function isRenderablePolicy(value: unknown): value is CriticPolicy {
+  if (!value || typeof value !== 'object') return false
+  const p = value as Record<string, unknown>
+  const numeric = [
+    'max_reduction_pct', 'min_monthly_saving_usd', 'min_samples', 'stale_after_hours',
+    'top_n_findings', 'cpu_floor_p99_multiplier', 'memory_floor_p99_multiplier',
+    'min_cpu_request_millicores', 'min_memory_request_mib', 'risk_window_hours',
+    'event_freeze_hours_after', 'change_window_start_hour', 'change_window_end_hour',
+  ]
+  if (!numeric.every((key) => typeof p[key] === 'number')) return false
+  if (typeof p.version !== 'string' || typeof p.rule_version !== 'string') return false
+  if (!Array.isArray(p.change_window_days)) return false
+  if (!Array.isArray(p.protected_workloads) || !Array.isArray(p.excluded_workloads)) return false
+  if (!Array.isArray(p.policy_exceptions)) return false
+  if (!p.criticality_headroom || typeof p.criticality_headroom !== 'object') return false
+  return true
+}
+
 export default function PolicyPanel({ onSaved }: { onSaved?: () => void }) {
   const [policy, setPolicy] = useState<CriticPolicy | null>(null)
   const [original, setOriginal] = useState<CriticPolicy | null>(null)
@@ -50,13 +77,17 @@ export default function PolicyPanel({ onSaved }: { onSaved?: () => void }) {
     let alive = true
     fetchPolicy().then((r) => {
       if (!alive) return
-      setPolicy(r.data)
-      setOriginal(r.data)
+      const loaded = r.data && isRenderablePolicy(r.data) ? r.data : null
+      setPolicy(loaded)
+      setOriginal(loaded)
       setLoading(false)
     })
     // The defaults are a convenience, not a requirement: if the endpoint is missing, the editor
-    // still works, it just cannot offer a reset.
-    void fetchDefaultPolicy().then((r) => { if (alive) setDefaults(r.data) })
+    // still works, it just cannot offer a reset. A malformed one is treated as missing, for
+    // the same reason the policy itself is.
+    void fetchDefaultPolicy().then((r) => {
+      if (alive && r.data && isRenderablePolicy(r.data)) setDefaults(r.data)
+    })
     return () => { alive = false }
   }, [])
 
@@ -74,7 +105,7 @@ export default function PolicyPanel({ onSaved }: { onSaved?: () => void }) {
     return (
       <Card>
         <CardContent className="py-6 text-sm text-muted-foreground">
-          The policy API is unavailable. The critic is running on the policy in <code>data/policy.yaml</code>.
+          The policy could not be read from the API. The critic is running on the policy in <code>data/policy.yaml</code>.
         </CardContent>
       </Card>
     )
@@ -95,6 +126,13 @@ export default function PolicyPanel({ onSaved }: { onSaved?: () => void }) {
     setBusy(true)
     try {
       const saved = await savePolicy(policy)
+      if (!isRenderablePolicy(saved)) {
+        // The save may well have succeeded; the response just cannot be rendered. Say so
+        // rather than putting a half-policy on screen.
+        toast.error('The policy was saved, but the response could not be read back.')
+        onSaved?.()
+        return
+      }
       setPolicy(saved)
       setOriginal(saved)
       toast.success(`Policy saved as version ${saved.version}. Earlier reports are now flagged as expired.`)
