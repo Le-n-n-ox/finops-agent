@@ -9,6 +9,7 @@ import type {
   ReportDetail,
   ReviewRequest,
   SimulationResult,
+  WorkloadResult,
   WorkloadRow,
 } from '@/types'
 
@@ -74,6 +75,86 @@ export async function runAnalysis(scenario = 'all'): Promise<LoadResult> {
     )
   }
   return { data: (await res.json()) as AnalysisResponse, source: 'api' }
+}
+
+/**
+ * Run the analysis and report each workload as it is finished.
+ *
+ * A full run is a multi-turn conversation with the model server for every workload, so it
+ * takes minutes rather than seconds. Without this the page shows nothing at all for the whole
+ * run, and a slow run is indistinguishable from a stuck one - the reader has no way to tell
+ * that anything is happening.
+ *
+ * The stream is the same analysis `/api/analyze` runs; the only difference is when the results
+ * arrive.
+ */
+export async function streamAnalysis(
+  scenario: string,
+  onWorkload: (result: WorkloadResult) => void,
+  onStart?: (total: number) => void,
+): Promise<LoadResult> {
+  let res: Response
+  try {
+    res = await fetch('/api/analyze/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenario }),
+    })
+  } catch {
+    // The backend is not reachable at all. Falling back to fixtures is honest here.
+    return loadMock(scenario)
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new BackendError(
+      `The analysis failed (${res.status}). ${detail}`.trim(),
+      res.status,
+    )
+  }
+  if (!res.body) throw new BackendError('The analysis stream was empty.', 500)
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let done: AnalysisResponse | null = null
+
+  const handle = async (event: string, data: string) => {
+    const payload = JSON.parse(data) as unknown
+    if (event === 'start') {
+      onStart?.((payload as { total?: number }).total ?? 0)
+    } else if (event === 'workload') {
+      onWorkload(payload as WorkloadResult)
+    } else if (event === 'done') {
+      done = payload as AnalysisResponse
+    } else if (event === 'error') {
+      const detail = (payload as { detail?: string }).detail ?? 'The analysis failed.'
+      throw new BackendError(detail, 500)
+    }
+  }
+
+  for (;;) {
+    const { value, done: finished } = await reader.read()
+    if (finished) break
+    buffer += decoder.decode(value, { stream: true })
+    // Events are separated by a blank line. A frame can be split across reads, so the buffer
+    // is only consumed up to the last complete separator.
+    let split = buffer.indexOf('\n\n')
+    while (split !== -1) {
+      const frame = buffer.slice(0, split)
+      buffer = buffer.slice(split + 2)
+      let event = 'message'
+      const dataLines: string[] = []
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('event:')) event = line.slice(6).trim()
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
+      }
+      if (dataLines.length) await handle(event, dataLines.join('\n'))
+      split = buffer.indexOf('\n\n')
+    }
+  }
+
+  if (!done) throw new BackendError('The analysis ended before it produced a result.', 500)
+  return { data: done, source: 'api' }
 }
 
 async function loadMock(scenario: string): Promise<LoadResult> {

@@ -1,10 +1,12 @@
-"""POST /api/analyze, GET /api/llm/status and POST /api/simulate."""
+"""POST /api/analyze, POST /api/analyze/stream, GET /api/llm/status and POST /api/simulate."""
 from __future__ import annotations
 
-from typing import Literal
+import asyncio
+import json
+from typing import AsyncIterator, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from app.api.deps import Services, api_errors, get_services
@@ -38,11 +40,80 @@ async def analyze(req: AnalyzeRequest | None = None, svc: Services = Depends(get
     otherwise. The `mode` field is still accepted in the body so an older frontend keeps
     working, but it is ignored: the deterministic pipeline is not a selectable alternative, it
     is the safety model behind every final decision.
+
+    This waits for the whole run. Use `/api/analyze/stream` when the caller needs to see it
+    happening.
     """
     with api_errors():
         # `mode` is deliberately not read: the agent cycle always runs.
         return await run_and_record(svc.store, mode=(req.mode if req else "agent"),
                                     inputs_fn=svc.inputs_fn)
+
+
+def _sse(event: str, payload: object) -> str:
+    """One server-sent event."""
+    return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+
+@router.post("/analyze/stream")
+async def analyze_stream(req: AnalyzeRequest | None = None,
+                         svc: Services = Depends(get_services)) -> Response:
+    """The same analysis, reported as it happens.
+
+    A full run is a multi-turn conversation with the model server for every workload, so it
+    takes minutes - and a caller that sees nothing until the end has no way to tell a slow run
+    from a stuck one. This sends each workload's result as it is finished, then the complete
+    response.
+
+    The events are:
+
+    | Event | Payload |
+    |---|---|
+    | `start` | `{"total": n}` - how many workloads there are, so the caller can show a progress bar. |
+    | `workload` | One `WorkloadResult`, as it is finished. |
+    | `done` | The complete `AnalysisResponse`, the same one `/api/analyze` returns. |
+    | `error` | `{"detail": "..."}`, when the run could not be completed. |
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def run() -> None:
+        try:
+            response = await run_and_record(
+                svc.store, mode=(req.mode if req else "agent"), inputs_fn=svc.inputs_fn,
+                on_workload=lambda result: queue.put_nowait(("workload", result)),
+            )
+            await queue.put(("done", response))
+        except Exception as exc:  # noqa: BLE001 - the stream has to say what went wrong
+            await queue.put(("error", {"detail": f"{type(exc).__name__}: {exc}"}))
+
+    async def frames() -> AsyncIterator[str]:
+        task = asyncio.create_task(run())
+        try:
+            # How many workloads there are, before the first one is finished. Without it a
+            # progress bar has no denominator, and "1 of ?" is not a progress bar.
+            try:
+                yield _sse("start", {"total": len(svc.bundle().services)})
+            except Exception:  # noqa: BLE001 - the count is a convenience, not a requirement
+                yield _sse("start", {"total": 0})
+            while True:
+                kind, payload = await queue.get()
+                if kind == "workload":
+                    yield _sse("workload", payload.model_dump(mode="json"))
+                elif kind == "done":
+                    yield _sse("done", payload.model_dump(mode="json"))
+                    return
+                else:
+                    yield _sse("error", payload)
+                    return
+        finally:
+            # If the client goes away, the run is abandoned rather than left in the background.
+            task.cancel()
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/llm/status")
