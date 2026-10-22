@@ -170,6 +170,73 @@ class TestAMalformedAnswerIsAnOutage:
         assert answer["conclusion"] is True
 
 
+class TestABadRequestIsOnlyRetriedWhenRetryingCanFixIt:
+    """Some models reject `temperature` or `max_tokens` outright.
+
+    The request is otherwise valid, so it is worth one more attempt without those two fields.
+    A 400 with any other cause is the server's considered answer, and retrying it just makes
+    the failure take twice as long.
+    """
+
+    def _client(self) -> "llm_client.OpenAICompatClient":
+        return llm_client.OpenAICompatClient(
+            llm_client.LLMConfig(base_url="http://127.0.0.1:8088/v1", api_key="k",
+                                 model="m", key_source="env METERLESS_API_KEY"),
+            timeout=1.0,
+        )
+
+    def _patch_post(self, monkeypatch, responses):
+        bodies = []
+
+        async def fake_post(_client, url, **kwargs):
+            bodies.append(kwargs.get("json"))
+            item = responses[min(len(bodies) - 1, len(responses) - 1)]
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        monkeypatch.setattr(llm_client, "TRANSIENT_RETRY_BACKOFF_SECONDS", 0.0)
+        return bodies
+
+    def test_a_400_that_blames_temperature_is_retried_without_it(self, monkeypatch):
+        bodies = self._patch_post(monkeypatch, [
+            _FakeResponse(400, {"error": "temperature is not supported by this model"}),
+            _FakeResponse(200, {"choices": [{"message": {"content": "hello"}}]}),
+        ])
+
+        client = self._client()
+        answer = asyncio.run(client.chat("s", "u", [], []))
+
+        assert answer["content"] == "hello"
+        assert len(bodies) == 2, "the 400 was not retried"
+        assert "temperature" in bodies[0]
+        assert "temperature" not in bodies[1], "the retry still carried the offending field"
+
+    def test_a_400_with_another_cause_is_not_retried(self, monkeypatch):
+        bodies = self._patch_post(monkeypatch, [
+            _FakeResponse(400, {"error": "unknown model id"}),
+        ])
+
+        client = self._client()
+        with pytest.raises(llm_client.LLMUnavailable):
+            asyncio.run(client.chat("s", "u", [], []))
+
+        assert len(bodies) == 1, "a 400 that cannot be fixed was retried"
+
+    def test_a_400_with_a_generic_body_is_not_retried(self, monkeypatch):
+        """A server that does not say what is wrong is not evidence that dropping fields helps."""
+        bodies = self._patch_post(monkeypatch, [
+            _FakeResponse(400, {"error": "Bad Request"}),
+        ])
+
+        client = self._client()
+        with pytest.raises(llm_client.LLMUnavailable):
+            asyncio.run(client.chat("s", "u", [], []))
+
+        assert len(bodies) == 1
+
+
 class TestTransientFailuresAreRetried:
     """A model server that hiccups is not the same as one that refuses.
 
