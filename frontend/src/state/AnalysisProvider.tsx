@@ -1,7 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchDashboard, fetchEvents, fetchLLMStatus, fetchWorkloadRows, runAnalysis, type LoadResult } from '@/api'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { fetchDashboard, fetchEvents, fetchLLMStatus, fetchWorkloadRows, streamAnalysis, type LoadResult } from '@/api'
 import { AnalysisContext, type AnalysisValue } from './analysis-context'
-import type { DecisionStatus, DashboardSummary, EventRow, LLMStatus, WorkloadRow } from '@/types'
+import type {
+  AnalysisResponse,
+  DecisionStatus,
+  DashboardSummary,
+  EventRow,
+  LLMStatus,
+  WorkloadResult,
+  WorkloadRow,
+} from '@/types'
 
 /**
  * The analysis, and everything derived from it, shared by every page.
@@ -9,6 +17,10 @@ import type { DecisionStatus, DashboardSummary, EventRow, LLMStatus, WorkloadRow
  * The dashboard was one long scroll with every panel stacked on it. Splitting it into pages means
  * the panels have to share their data, or each page would re-run the analysis. So the analysis
  * lives here, once, and the pages read from it.
+ *
+ * The run is streamed. A full analysis is a multi-turn conversation with the model server for
+ * every workload, so it takes minutes - and a page that shows nothing for the whole of it is
+ * indistinguishable from a broken one. Each workload appears as it is finished.
  */
 export default function AnalysisProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<LoadResult | null>(null)
@@ -21,12 +33,58 @@ export default function AnalysisProvider({ children }: { children: React.ReactNo
   const [workloadRows, setWorkloadRows] = useState<WorkloadRow[] | null>(null)
   const [filter, setFilter] = useState<DecisionStatus | 'all'>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  // How far the run has got. The totals come from the workload list, so the bar is honest about
+  // how much is left even before the first workload is finished.
+  const [progress, setProgress] = useState({ done: 0, total: 0, startedAt: 0 })
+
+  // The results as they arrive, and the running summary built from them.
+  const partial = useRef<WorkloadResult[]>([])
+
+  const summarise = (results: WorkloadResult[]) => ({
+    workloads_evaluated: results.length,
+    approved: results.filter((r) => r.decision === 'approved').length,
+    deferred: results.filter((r) => r.decision === 'deferred').length,
+    rejected: results.filter((r) => r.decision === 'rejected').length,
+    needs_review: results.filter((r) => r.decision === 'needs_review').length,
+    no_change: results.filter((r) => r.decision === 'no_change').length,
+    estimated_monthly_savings_usd: results
+      .filter((r) => r.decision === 'approved')
+      .reduce((sum, r) => sum + (r.monthly_savings_estimate_usd ?? 0), 0),
+  })
 
   const load = useCallback(async () => {
     setLoading(true)
     setError(null)
+    partial.current = []
+    setProgress({ done: 0, total: 0, startedAt: Date.now() })
     try {
-      const res = await runAnalysis(scenario)
+      const res = await streamAnalysis(scenario, (result) => {
+        // Each workload lands on screen as it is finished. The summary is recomputed from
+        // what is in hand, so the numbers on screen always match the rows on screen.
+        partial.current = [...partial.current, result]
+        const results = [...partial.current]
+        setProgress((p) => ({ ...p, done: results.length }))
+        setState((current) => {
+          const base = current?.data
+          const running: AnalysisResponse = {
+            analysis_id: base?.analysis_id ?? 'running',
+            generated_at: base?.generated_at ?? new Date().toISOString(),
+            mode: base?.mode ?? 'agent',
+            summary: summarise(results),
+            results,
+            warnings: base?.warnings ?? [],
+            policy_version: base?.policy_version,
+            rule_version: base?.rule_version,
+            input_fingerprint: base?.input_fingerprint,
+            top_n_findings: base?.top_n_findings ?? 5,
+            top_opportunities: base?.top_opportunities ?? [],
+            llm_backend: base?.llm_backend,
+            llm_model: base?.llm_model,
+            llm_base_url: base?.llm_base_url,
+          }
+          return { data: running, source: 'api' }
+        })
+      }, (total) => setProgress((p) => ({ ...p, total })))
       setState(res)
       setFilter('all')
       // single-workload scenarios open their detail straight away (demo flow)
@@ -66,8 +124,8 @@ export default function AnalysisProvider({ children }: { children: React.ReactNo
   const value = useMemo<AnalysisValue>(() => ({
     state, loading, error, scenario, setScenario, reload: load, llmStatus,
     dashboard, events, workloadRows, filter, setFilter, selectedId, setSelectedId,
-    simulatorUnavailable,
-  }), [state, loading, error, scenario, load, llmStatus, dashboard, events, workloadRows, filter, selectedId, simulatorUnavailable])
+    simulatorUnavailable, progress,
+  }), [state, loading, error, scenario, load, llmStatus, dashboard, events, workloadRows, filter, selectedId, simulatorUnavailable, progress])
 
   return <AnalysisContext.Provider value={value}>{children}</AnalysisContext.Provider>
 }

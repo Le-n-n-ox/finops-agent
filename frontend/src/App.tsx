@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { FileDown, FileJson2, History, Info, Lock, Printer, RefreshCw, ServerCog, ShieldCheck, TriangleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -27,6 +27,56 @@ function LoadingSkeleton() {
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-24" />)}</div>
       <Skeleton className="h-64" />
     </div>
+  )
+}
+
+/**
+ * What the run is doing, and how far along it is.
+ *
+ * A full analysis is a multi-turn conversation with the model server for every workload - it
+ * takes minutes, not seconds. A page that shows nothing for the whole of it is
+ * indistinguishable from a broken one, so the reader is told what is happening and how much is
+ * left. The elapsed time matters as much as the count: it is what tells a slow run from a
+ * stuck one.
+ */
+function RunProgress({ done, total, startedAt, model }: {
+  done: number
+  total: number
+  startedAt: number
+  model?: string | null
+}) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+  const elapsed = Math.max(0, Math.floor((now - startedAt) / 1000))
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0
+  const clock = `${Math.floor(elapsed / 60)}m ${String(elapsed % 60).padStart(2, '0')}s`
+
+  return (
+    <section className="rounded-xl border bg-card p-4" aria-live="polite" aria-label="Analysis progress">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <p className="text-sm font-medium">
+          {total > 0
+            ? `Reviewing workloads — ${done} of ${total} done`
+            : 'Starting the review…'}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {clock} elapsed — each workload is a multi-turn review against the model server
+        </p>
+      </div>
+      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-muted" role="progressbar"
+           aria-valuenow={done} aria-valuemin={0} aria-valuemax={total || undefined}>
+        <div className="h-full rounded-full bg-primary transition-[width] duration-500"
+             style={{ width: `${total > 0 ? pct : 8}%` }} />
+      </div>
+      {model && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {model} is answering. The run is not stuck — it is reasoning, one turn at a time.
+        </p>
+      )}
+    </section>
   )
 }
 
@@ -79,7 +129,7 @@ const PAGES = [
 ] as const
 
 export default function App() {
-  const { state, error, loading, scenario, setScenario, reload, llmStatus } = useAnalysis()
+  const { state, error, loading, scenario, setScenario, reload, llmStatus, progress } = useAnalysis()
   const { path, navigate } = useRouter()
 
   const exportReport = async (format: 'markdown' | 'json') => {
@@ -176,7 +226,16 @@ export default function App() {
           <TriangleAlert className="size-4 shrink-0" aria-hidden />{error}
         </p>
       )}
-      {loading && !state && <LoadingSkeleton />}
+      {loading && progress.done === 0 && <LoadingSkeleton />}
+
+      {loading && (
+        <RunProgress
+          done={progress.done}
+          total={progress.total}
+          startedAt={progress.startedAt}
+          model={state?.data.llm_model ?? llmStatus?.model}
+        />
+      )}
 
       {/*
         The navigation is outside the analysis block on purpose. Policy and History do not need
