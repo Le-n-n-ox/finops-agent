@@ -47,18 +47,52 @@ export interface Fetched<T> {
 }
 
 /**
+ * How long a request may take before the UI stops waiting for it.
+ *
+ * The analysis can be slow: the agent cycle runs a proposer, a critic and a judge, and each of
+ * them can call a model. Two minutes is generous for that. But a backend that never answers must
+ * not leave the page waiting forever — that reads as a blank page with no explanation.
+ */
+const ANALYSIS_TIMEOUT_MS = 120_000
+
+/** The panels that hang off the analysis are quick; a tenth of that is already a broken backend. */
+const READ_TIMEOUT_MS = 20_000
+
+const isTimeout = (e: unknown) =>
+  e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')
+
+/**
  * Try POST /api/analyze; fall back to bundled fixtures so the UI works before the backend does.
  * `scenario` is sent to the API (ignored until backend supports it) and selects the mock fixture.
+ *
+ * `signal` cancels the request when the caller no longer wants the result. A cancelled run must
+ * not fall back to the fixtures: the analysis may still be running on the backend, and showing
+ * fixtures for it would present mock data as a completed analysis.
  */
-export async function runAnalysis(scenario = 'all', mode = 'pipeline'): Promise<LoadResult> {
+export async function runAnalysis(scenario = 'all', mode = 'pipeline', signal?: AbortSignal): Promise<LoadResult> {
+  const timeout = AbortSignal.timeout(ANALYSIS_TIMEOUT_MS)
   let res: Response
   try {
     res = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scenario, mode }),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     })
-  } catch {
+  } catch (e) {
+    if (signal?.aborted) {
+      throw new BackendError('The analysis was superseded by a newer run.', 409)
+    }
+    // A backend that is unreachable and a backend that never answers are different failures. The
+    // first can fall back to the fixtures, because nothing is running. The second might still be
+    // working on the run, and showing fixtures for it would misrepresent a live analysis as a
+    // completed one - so it is reported instead.
+    if (isTimeout(e)) {
+      throw new BackendError(
+        `The backend did not answer within ${ANALYSIS_TIMEOUT_MS / 1000} seconds. It may be busy or stuck - check that it is running, then try again.`,
+        408,
+      )
+    }
     // The backend is not reachable at all. Falling back to fixtures is honest here.
     return loadMock(scenario)
   }
@@ -98,6 +132,7 @@ export async function submitReview(reportId: string, request: ReviewRequest): Pr
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
+    signal: AbortSignal.timeout(READ_TIMEOUT_MS),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
@@ -117,7 +152,7 @@ export async function submitReview(reportId: string, request: ReviewRequest): Pr
  */
 async function getJSON<T>(path: string): Promise<Fetched<T>> {
   try {
-    const res = await fetch(path)
+    const res = await fetch(path, { signal: AbortSignal.timeout(READ_TIMEOUT_MS) })
     if (!res.ok) return { data: null, failed: true }
     return { data: (await res.json()) as T, failed: false }
   } catch {
@@ -158,6 +193,7 @@ export async function savePolicy(policy: CriticPolicy): Promise<CriticPolicy> {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(policy),
+    signal: AbortSignal.timeout(READ_TIMEOUT_MS),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
@@ -194,6 +230,7 @@ export async function simulate(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workload_id: workloadId, ...requests }),
+    signal: AbortSignal.timeout(READ_TIMEOUT_MS),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')

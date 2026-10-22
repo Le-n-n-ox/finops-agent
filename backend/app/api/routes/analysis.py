@@ -1,11 +1,13 @@
 """POST /api/analyze and POST /api/simulate."""
 from __future__ import annotations
 
+import asyncio
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import Services, api_errors, get_services
 from app.models.review import ResourceRequests, SimulationRequest, SimulationResult
@@ -26,6 +28,22 @@ class AnalyzeRequest(BaseModel):
     mode: str = "pipeline"  # "pipeline" | "agent"
 
 
+def _analyze_off_loop(svc: Services, mode: str) -> AnalysisResponse:
+    """Run one analysis on a worker thread.
+
+    An analysis is CPU- and IO-heavy: the optimizer, the critic, the agent cycle and the database
+    writes. Run straight from the async endpoint it occupies the event loop for its whole duration,
+    so every other request - /api/health included - waits behind it and the whole API looks dead
+    while a run is in flight. Off the loop, the dashboard keeps answering during an analysis.
+
+    The analysis is driven through `asyncio.run` because it is written as coroutines, but nothing
+    in it waits on real IO: the only awaited call is the simulated LLM client.
+    """
+    if mode == "agent":
+        return asyncio.run(run_and_record(svc.store, mode="agent"))
+    return asyncio.run(run_and_record(svc.store, inputs_fn=svc.inputs_fn, proposals_fn=svc.proposals_fn))
+
+
 @router.post("/analyze", response_model=AnalysisResponse)
 async def analyze(req: AnalyzeRequest | None = None, svc: Services = Depends(get_services)) -> AnalysisResponse:
     """Triggers the FinOps Agent analysis and returns structured results.
@@ -34,9 +52,7 @@ async def analyze(req: AnalyzeRequest | None = None, svc: Services = Depends(get
     """
     with api_errors():
         mode = (req.mode if req else "pipeline") or "pipeline"
-        if mode == "agent":
-            return await run_and_record(svc.store, mode="agent")
-        return await run_and_record(svc.store, inputs_fn=svc.inputs_fn, proposals_fn=svc.proposals_fn)
+        return await run_in_threadpool(_analyze_off_loop, svc, mode)
 
 
 @router.get("/validation", response_model=ValidationResponse)
