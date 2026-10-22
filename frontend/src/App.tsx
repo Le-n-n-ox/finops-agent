@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { FileDown, FileJson2, Info, Lock, Printer, RefreshCw, ServerCog, TriangleAlert } from 'lucide-react'
+import { Info, PanelLeftClose, PanelLeftOpen, RefreshCw, TriangleAlert, X } from 'lucide-react'
 import { fetchDashboard, fetchEvents, fetchWorkloadRows, runAnalysis, type LoadResult } from '@/api'
 import type { DecisionStatus, DashboardSummary, EventRow, WorkloadRow } from '@/types'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { cn } from '@/lib/utils'
 import { buildReport, downloadText } from '@/lib/report'
-import { useMediaQuery } from '@/hooks/useMediaQuery'
+import { cn } from '@/lib/utils'
+import { goHome, goLanding, goToWorkload, useHashRoute } from '@/hooks/useHashRoute'
+import LandingPage from '@/components/landing/LandingPage'
 import AppToaster from '@/components/AppToaster'
-import ThemeToggle from '@/components/ThemeToggle'
-import ScenarioSwitcher from '@/components/ScenarioSwitcher'
+import Navbar, { Toolbar, type Mode } from '@/components/Navbar'
+import Sidebar, { type View } from '@/components/Sidebar'
+import WorkloadPage from '@/components/WorkloadPage'
 import Workflow from '@/components/Workflow'
 import InputStatus from '@/components/InputStatus'
 import SummaryCards from '@/components/SummaryCards'
@@ -24,8 +25,8 @@ import PolicyPanel from '@/components/PolicyPanel'
 import DecisionHistory from '@/components/DecisionHistory'
 import ProvenanceStrip from '@/components/ProvenanceStrip'
 import ResultsTable from '@/components/ResultsTable'
-import DetailPanel from '@/components/DetailPanel'
-import DetailSheet from '@/components/DetailSheet'
+import Band from '@/components/Band'
+import TopOpportunities from '@/components/TopOpportunities'
 
 function LoadingSkeleton() {
   return (
@@ -51,44 +52,112 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [scenario, setScenario] = useState('all')
-  const [mode, setMode] = useState<'pipeline' | 'agent'>('pipeline')
+  const [mode, setMode] = useState<Mode>('pipeline')
   const [filter, setFilter] = useState<DecisionStatus | 'all'>('all')
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [view, setView] = useState<'analysis' | 'policy' | 'history'>('analysis')
+  const [view, setView] = useState<View>('analysis')
   const [dashboard, setDashboard] = useState<DashboardSummary | null>(null)
   const [events, setEvents] = useState<EventRow[] | null>(null)
   const [workloadRows, setWorkloadRows] = useState<WorkloadRow[] | null>(null)
-  const isDesktop = useMediaQuery('(min-width: 1024px)')
+  const [navOpen, setNavOpen] = useState(false)
+  // The route is the URL: a workload opens on its own page, everything else is the dashboard.
+  const route = useHashRoute()
+  // The landing page is the front door and needs no analysis behind it, so nothing is run
+  // until the reader steps into the workspace. This is a boolean rather than the route kind,
+  // because home and workload are both "in the workspace" and must not restart the run.
+  const inWorkspace = route.kind !== 'landing'
+
+  // The rail can be folded down to its icons to give the tables and charts the width back.
+  // The choice is remembered, because re-collapsing it on every reload is a small daily tax.
+  const [railCollapsed, setRailCollapsed] = useState(
+    () => localStorage.getItem('finops.rail-collapsed') === '1',
+  )
+  useEffect(() => {
+    localStorage.setItem('finops.rail-collapsed', railCollapsed ? '1' : '0')
+  }, [railCollapsed])
+
+  // The bar wraps to two rows on narrow screens, so its height is not a constant. Measuring it
+  // keeps the sidebar flush against the bar instead of guessing a pixel value that goes stale.
+  const navRef = useRef<HTMLElement>(null)
+  const [navHeight, setNavHeight] = useState(0)
+  useEffect(() => {
+    const el = navRef.current
+    if (!el) return
+    const observer = new ResizeObserver(([entry]) => setNavHeight(entry.contentRect.height))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  // The drawer is a modal on small screens: Escape closes it and the page behind it must not
+  // scroll away under the user's finger.
+  useEffect(() => {
+    if (!navOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNavOpen(false) }
+    document.addEventListener('keydown', onKey)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = ''
+    }
+  }, [navOpen])
+
+  // Widening the window to desktop while the drawer is open would leave the page scroll-locked
+  // with an invisible drawer on top of it. The listener, rather than a plain effect, means the
+  // drawer is closed by the resize itself and not on every render that follows it.
+  useEffect(() => {
+    const mq = matchMedia('(min-width: 1024px)')
+    const on = (e: MediaQueryListEvent) => { if (e.matches) setNavOpen(false) }
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+
+  // A newer run supersedes the one in flight. The request is aborted so the backend is not asked
+  // to do work nobody is waiting for, and the run id keeps a superseded run from overwriting the
+  // results of the run that replaced it. Without this, React StrictMode's double-invoked effect
+  // leaves two analyses writing to the same store at once.
+  const runIdRef = useRef(0)
+  const abortRef = useRef<AbortController | null>(null)
 
   const load = useCallback(async () => {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    const runId = ++runIdRef.current
+
     setLoading(true)
     setError(null)
     try {
-      const res = await runAnalysis(scenario, mode)
+      const res = await runAnalysis(scenario, mode, controller.signal)
+      if (runId !== runIdRef.current) return
       setState(res)
       setFilter('all')
       // single-workload scenarios open their detail straight away (demo flow)
-      setSelectedId(res.data.results.length === 1 ? res.data.results[0].workload_id : null)
+      if (res.data.results.length === 1) goToWorkload(res.data.results[0].workload_id)
       // History and events come from separate endpoints. A failure there must not fail the page, but
       // it must not leave the previous run's numbers on screen either: a stale trend is worse than
       // no trend, because it looks current.
-      void fetchDashboard().then((d) => setDashboard(d.data))
-      void fetchEvents().then((e) => setEvents(e.data))
-      void fetchWorkloadRows().then((w) => setWorkloadRows(w.data))
+      void fetchDashboard().then((d) => { if (runId === runIdRef.current) setDashboard(d.data) })
+      void fetchEvents().then((e) => { if (runId === runIdRef.current) setEvents(e.data) })
+      void fetchWorkloadRows().then((w) => { if (runId === runIdRef.current) setWorkloadRows(w.data) })
     } catch (e) {
+      // A superseded run is not a failure; the run that replaced it owns the screen now.
+      if (runId !== runIdRef.current) return
       setError(e instanceof Error ? e.message : 'Failed to load analysis')
     } finally {
-      setLoading(false)
+      if (runId === runIdRef.current) setLoading(false)
     }
   }, [scenario, mode])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    if (!inWorkspace) return
+    void load()
+    return () => { abortRef.current?.abort() }
+  }, [load, inWorkspace])
 
   const visible = useMemo(
     () => (state?.data.results ?? []).filter((r) => filter === 'all' || r.decision === filter),
     [state, filter],
   )
-  const selected = state?.data.results.find((r) => r.workload_id === selectedId) ?? null
+  const selected = state?.data.results.find((r) => r.workload_id === (route.kind === 'workload' ? route.workloadId : null)) ?? null
 
   // The what-if needs a stored report on the backend to re-decide against. Offline it cannot run,
   // and saying so is better than a raw error toast.
@@ -119,152 +188,191 @@ export default function App() {
     }
   }
 
+  // Picking a section leaves the workload page: the sections are the dashboard's own views, and
+  // a workload page is a page of its own.
+  const pickView = (next: View) => {
+    setView(next)
+    goHome()
+  }
+
+  // The controls live in two places: the top bar on wide screens, the drawer on narrow ones.
+  // They are described once here so the two surfaces can never drift apart.
+  const toolbar = {
+    source: state?.source ?? null,
+    modeLabel: state ? MODE_LABEL[state.data.mode] ?? state.data.mode : '',
+    mode,
+    onModeChange: setMode,
+    scenario,
+    onScenarioChange: setScenario,
+    loading,
+    onRun: () => void load(),
+    canExport: !!state,
+    onExport: (format: 'markdown' | 'json') => void exportReport(format),
+  }
+
+  // The landing page has its own chrome, and none of the workspace's state applies to it.
+  if (!inWorkspace) return <LandingPage />
+
   return (
-    <div className="mx-auto max-w-7xl space-y-6 px-4 py-8">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground"><ServerCog className="size-5" aria-hidden /></span>
-          <div>
-            <h1 className="text-xl leading-tight font-semibold">Kubernetes FinOps Agent</h1>
-            <p className="text-sm text-muted-foreground">Evidence-based, multi-agent resource recommendations</p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline"><Lock aria-hidden />Recommendation-only</Badge>
-          {state && (
-            <Badge variant="outline" className={cn(state.source === 'api' && 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300')}>
-              {state.source === 'api'
-                ? `Live API · ${MODE_LABEL[state.data.mode] ?? state.data.mode}`
-                : 'Mock data · API offline'}
-            </Badge>
-          )}
-          {state?.source === 'mock' && <ScenarioSwitcher value={scenario} onChange={setScenario} />}
-          <div className="flex items-center gap-1 rounded-lg border p-0.5 print:hidden" role="group" aria-label="Reasoning mode">
-            <Button
-              variant={mode === 'pipeline' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7"
-              aria-pressed={mode === 'pipeline'}
-              onClick={() => setMode('pipeline')}
-              title="Deterministic optimizer and critic. No language model involved."
-            >
-              Pipeline
-            </Button>
-            <Button
-              variant={mode === 'agent' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7"
-              aria-pressed={mode === 'agent'}
-              onClick={() => setMode('agent')}
-              title="Proposer, Critic and Judge review cycle with evidence-based confidence scoring."
-            >
-              Agent cycle
-            </Button>
-          </div>
-          <div className="flex items-center gap-2 print:hidden">
-            <Button variant="outline" size="icon" onClick={() => void exportReport('markdown')} disabled={!state} aria-label="Export report as Markdown" title="Export report (Markdown)"><FileDown /></Button>
-            <Button variant="outline" size="icon" onClick={() => void exportReport('json')} disabled={!state} aria-label="Export audit data as JSON" title="Export audit data (JSON)"><FileJson2 /></Button>
-            <Button variant="outline" size="icon" onClick={() => window.print()} disabled={!state} aria-label="Print or save as PDF" title="Print / save as PDF"><Printer /></Button>
-            <ThemeToggle />
-            <Button onClick={() => void load()} disabled={loading}>
-              <RefreshCw className={cn(loading && 'animate-spin')} aria-hidden />{loading ? 'Running…' : 'Run analysis'}
-            </Button>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen">
+      <Navbar {...toolbar} ref={navRef} navOpen={navOpen} onOpenNav={() => setNavOpen(true)} />
 
-      {error && (
-        <p role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
-          <TriangleAlert className="size-4 shrink-0" aria-hidden />{error}
-        </p>
-      )}
-      {loading && !state && <LoadingSkeleton />}
-
-      {state && (
-        <>
-          <nav className="flex gap-1 border-b print:hidden" aria-label="Sections">
-            {([['analysis', 'Analysis'], ['policy', 'Policy'], ['history', 'History']] as const).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setView(key)}
-                aria-current={view === key ? 'page' : undefined}
-                className={cn(
-                  'px-3 py-2 text-sm font-medium -mb-px border-b-2 transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
-                  view === key ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
-
-          {view === 'policy' ? (
-            <PolicyPanel onSaved={() => void load()} />
-          ) : view === 'history' ? (
-            <DecisionHistory />
-          ) : (
-            <>
-          {state.data.warnings.map((w) => (
-            <p key={w} className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
-              <Info className="size-4 shrink-0" aria-hidden />{w}
-            </p>
-          ))}
-          <ProvenanceStrip data={state.data} />
-          <Workflow data={state.data} />
-          <InputStatus data={state.data} />
-          <SummaryCards summary={state.data.summary} active={filter} onFilter={setFilter} />
-          {!!state.data.top_opportunities?.length && <section className="rounded-xl border bg-card p-4" aria-label="Top ranked opportunities">
-            <div className="mb-3 flex items-baseline justify-between gap-3">
-              <h2 className="font-semibold">Top opportunities</h2>
-              <span className="text-xs text-muted-foreground">Ranked from approved recommendations · top {state.data.top_n_findings ?? 5}</span>
-            </div>
-            <ol className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-              {state.data.top_opportunities.map((item, index) => <li key={item.workload_id} className="rounded-lg border p-3">
-                <p className="text-xs text-muted-foreground">#{index + 1} · priority {item.priority_score.toFixed(2)}</p>
-                <p className="font-medium">{item.workload_id}</p>
-                <p className="text-sm">${item.monthly_savings_usd.toFixed(2)} / month</p>
-                <p className="text-xs text-muted-foreground">{item.confidence_score.toFixed(0)}% confidence · {item.risk_level} risk</p>
-              </li>)}
-            </ol>
-          </section>}
-          <SavingsPotential results={state.data.results} />
-          <div className="grid gap-6 md:grid-cols-2">
-            <DecisionDonut summary={state.data.summary} active={filter} onFilter={setFilter} />
-            <SavingsChart results={state.data.results} />
-          </div>
-          <div className="grid gap-6 lg:grid-cols-2">
-            <TrendChart trend={dashboard?.trend ?? []} />
-            <EventTimeline events={events ?? []} now={state.data.generated_at} />
-          </div>
-          <div className="grid items-start gap-6 lg:grid-cols-[1fr_440px]">
-            <ResultsTable results={visible} selectedId={selectedId} onSelect={setSelectedId} workloadRows={workloadRows} />
-            {isDesktop && (selected ? (
-              <DetailPanel
-                key={selected.workload_id}
-                result={selected}
-                reportId={state.data.analysis_id}
-                simulatorUnavailable={simulatorUnavailable}
+      <div className="mx-auto flex w-full max-w-[1600px]">
+        <aside className={cn('app-rail hidden shrink-0 lg:block', railCollapsed ? 'w-16' : 'w-60')}>
+          <div className="sticky top-16 flex flex-col" style={navHeight ? { top: navHeight } : undefined}>
+            <div className="flex-1 py-6">
+              {!railCollapsed && (
+                <p className="mb-2 px-3 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Workspace</p>
+              )}
+              <Sidebar
+                id="app-rail-nav"
+                view={route.kind === 'workload' ? 'analysis' : view}
+                onViewChange={pickView}
+                collapsed={railCollapsed}
+                onOverview={goLanding}
               />
-            ) : (
-              <p className="rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground">Select a workload to see evidence, the critic's audit trail and the proposed patch.</p>
-            ))}
+            </div>
+            <div className={cn('border-t py-3', railCollapsed ? 'flex justify-center' : 'px-3')}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setRailCollapsed((c) => !c)}
+                aria-expanded={!railCollapsed}
+                aria-controls="app-rail-nav"
+                aria-label={railCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                title={railCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                className={cn(railCollapsed && 'size-8 p-0')}
+              >
+                {railCollapsed ? <PanelLeftOpen aria-hidden /> : <PanelLeftClose aria-hidden />}
+                {!railCollapsed && <span>Collapse</span>}
+              </Button>
+            </div>
           </div>
-          <footer className="border-t pt-4 text-xs text-muted-foreground">
-            Prototype using local/mock data. Savings are illustrative estimates, not guaranteed bill reductions. Every change requires human approval; nothing is applied to a cluster.
-          </footer>
+        </aside>
+
+        <main className="min-w-0 flex-1 space-y-6 px-4 py-6 lg:px-6">
+
+          {error && !state ? (
+            // Nothing to show and no data: say what went wrong and offer a retry, rather than
+            // leaving an empty page that looks like the app is broken.
+            <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-6 text-center dark:border-red-900 dark:bg-red-950">
+              <p className="flex items-start justify-center gap-2 text-sm font-medium text-red-800 dark:text-red-200">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />{error}
+              </p>
+              <Button variant="outline" size="sm" className="mt-4" onClick={() => void load()}>
+                <RefreshCw aria-hidden />Try again
+              </Button>
+            </div>
+          ) : error && (
+            <p role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+              <TriangleAlert className="size-4 shrink-0" aria-hidden />{error}
+            </p>
+          )}
+          {loading && !state && !error && <LoadingSkeleton />}
+
+          {state && (
+            <>
+              {route.kind === 'workload' ? (
+                selected ? (
+                  <WorkloadPage
+                    result={selected}
+                    reportId={state.data.analysis_id}
+                    onBack={goHome}
+                    simulatorUnavailable={simulatorUnavailable}
+                  />
+                ) : (
+                  <div className="rounded-xl border border-dashed p-10 text-center">
+                    <p className="text-sm font-medium">{route.workloadId} is not in this analysis</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      It may have been analysed under a different scenario or policy. Run the analysis again, or go back to the workload list.
+                    </p>
+                    <Button variant="outline" size="sm" className="mt-4" onClick={goHome}>Back to all workloads</Button>
+                  </div>
+                )
+              ) : view === 'policy' ? (
+                <PolicyPanel onSaved={() => void load()} />
+              ) : view === 'history' ? (
+                <DecisionHistory />
+              ) : (
+                <>
+              {state.data.warnings.map((w) => (
+                <p key={w} className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                  <Info className="size-4 shrink-0" aria-hidden />{w}
+                </p>
+              ))}
+
+              {/* The page is one long report. Three bands, so a reader who lands in the middle
+                  of it knows whether they are looking at how the run went, what it found, or the
+                  evidence behind the finding. */}
+              <div className="space-y-8">
+                <section className="space-y-4" aria-label="How the run went">
+                  <Band title="How the run went" />
+                  <ProvenanceStrip data={state.data} />
+                  <Workflow data={state.data} />
+                  <InputStatus data={state.data} />
+                </section>
+
+                <section className="space-y-4" aria-label="What it found">
+                  <Band title="What it found" />
+                  <SummaryCards summary={state.data.summary} active={filter} onFilter={setFilter} />
+                  {!!state.data.top_opportunities?.length && (
+                    <TopOpportunities items={state.data.top_opportunities} />
+                  )}
+                  <SavingsPotential results={state.data.results} />
+                </section>
+
+                <section className="space-y-4" aria-label="The evidence">
+                  <Band title="The evidence" />
+                  <div className="grid gap-6 md:grid-cols-2">
+                    <DecisionDonut summary={state.data.summary} active={filter} onFilter={setFilter} />
+                    <SavingsChart results={state.data.results} />
+                  </div>
+                  <div className="grid gap-6 lg:grid-cols-2">
+                    <TrendChart trend={dashboard?.trend ?? []} />
+                    <EventTimeline events={events ?? []} now={state.data.generated_at} />
+                  </div>
+                  <ResultsTable
+                    results={visible}
+                    selectedId={null}
+                    onSelect={(id) => goToWorkload(id)}
+                    workloadRows={workloadRows}
+                  />
+                  <footer className="border-t pt-4 text-xs text-muted-foreground">
+                    Prototype using local/mock data. Savings are illustrative estimates, not guaranteed bill reductions. Every change requires human approval; nothing is applied to a cluster.
+                  </footer>
+                </section>
+              </div>
+                </>
+              )}
             </>
           )}
-        </>
+
+        </main>
+      </div>
+
+      {navOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden print:hidden" role="dialog" aria-modal="true" aria-label="Navigation" id="mobile-nav">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setNavOpen(false)} />
+          <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col gap-4 overflow-y-auto border-r bg-background p-4 shadow-xl animate-in slide-in-from-left duration-200">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold">Navigation</span>
+              <Button variant="ghost" size="icon" onClick={() => setNavOpen(false)} aria-label="Close navigation">
+                <X />
+              </Button>
+            </div>
+            <Sidebar
+              view={route.kind === 'workload' ? 'analysis' : view}
+              onViewChange={pickView}
+              onNavigate={() => setNavOpen(false)}
+              onOverview={goLanding}
+            />
+            <div className="border-t pt-4">
+              <Toolbar {...toolbar} layout="stack" />
+            </div>
+          </div>
+        </div>
       )}
 
-      {!isDesktop && selected && state && (
-        <DetailSheet
-          result={selected}
-          reportId={state.data.analysis_id}
-          onClose={() => setSelectedId(null)}
-          simulatorUnavailable={simulatorUnavailable}
-        />
-      )}
       <AppToaster />
     </div>
   )

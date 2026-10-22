@@ -55,7 +55,7 @@ export default function SavingsPotential({ results }: { results: WorkloadResult[
     key,
     amount: byDecision.get(key) ?? 0,
     label: DECISIONS[key].label,
-    hex: DECISIONS[key].hex,
+    color: DECISIONS[key].css,
   })).filter((s) => s.amount > 0)
 
   return (
@@ -70,29 +70,38 @@ export default function SavingsPotential({ results }: { results: WorkloadResult[
       </CardHeader>
       <CardContent className="space-y-4">
         <div
-          className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted"
+          className="flex h-2.5 w-full gap-[2px] overflow-hidden rounded-full bg-muted"
           role="img"
           aria-label={segments.map((s) => `${s.label} ${usd(s.amount)}`).join(', ')}
         >
-          {segments.map((s) => (
-            <div key={s.key} style={{ width: `${(s.amount / potential) * 100}%`, background: s.hex }} title={`${s.label} ${usd(s.amount)}`} />
+          {segments.map((s, i) => (
+            <div
+              key={s.key}
+              className="app-grow h-full rounded-full"
+              style={{
+                width: `${(s.amount / potential) * 100}%`,
+                background: s.color,
+                animationDelay: `${i * 90}ms`,
+              }}
+              title={`${s.label} ${usd(s.amount)}`}
+            />
           ))}
         </div>
 
         <dl className="grid gap-3 sm:grid-cols-3">
-          <div>
+          <div className="rounded-xl border bg-background px-4 py-3">
             <dt className="text-xs tracking-wide text-muted-foreground uppercase">Potential</dt>
             <dd className="font-mono text-xl font-semibold tabular-nums">{usd(potential)}</dd>
             <dd className="text-xs text-muted-foreground">per month, if every proposal were applied</dd>
           </div>
-          <div>
+          <div className="rounded-xl border bg-background px-4 py-3">
             <dt className="text-xs tracking-wide text-muted-foreground uppercase">Approved</dt>
-            <dd className="font-mono text-xl font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{usd(approved)}</dd>
+            <dd className="font-mono text-xl font-semibold tabular-nums text-positive">{usd(approved)}</dd>
             <dd className="text-xs text-muted-foreground">counted, review-only, per month</dd>
           </div>
-          <div>
+          <div className="rounded-xl border bg-background px-4 py-3">
             <dt className="text-xs tracking-wide text-muted-foreground uppercase">Held back</dt>
-            <dd className="font-mono text-xl font-semibold tabular-nums text-amber-600 dark:text-amber-400">{usd(heldBack)}</dd>
+            <dd className="font-mono text-xl font-semibold tabular-nums text-caution">{usd(heldBack)}</dd>
             <dd className="text-xs text-muted-foreground">{heldPct.toFixed(0)}% of the potential, deliberately withheld</dd>
           </div>
         </dl>
@@ -100,7 +109,7 @@ export default function SavingsPotential({ results }: { results: WorkloadResult[
         <ul className="flex flex-wrap gap-x-4 gap-y-1 border-t pt-3 text-xs text-muted-foreground">
           {segments.map((s) => (
             <li key={s.key} className="flex items-center gap-1.5">
-              <span className="size-2 rounded-full" style={{ background: s.hex }} aria-hidden />
+              <span className="size-2 rounded-full" style={{ background: s.color }} aria-hidden />
               {s.label}
               <span className="font-mono tabular-nums">{usd(s.amount)}</span>
             </li>

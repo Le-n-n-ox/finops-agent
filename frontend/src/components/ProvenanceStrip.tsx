@@ -1,4 +1,4 @@
-import { Fingerprint, ScrollText, Tag } from 'lucide-react'
+import { Fingerprint, ScrollText, Tag, type LucideIcon } from 'lucide-react'
 import type { AnalysisResponse } from '@/types'
 import { cn } from '@/lib/utils'
 
@@ -16,32 +16,39 @@ import { cn } from '@/lib/utils'
 export default function ProvenanceStrip({ data }: { data: AnalysisResponse }) {
   const agent = data.mode === 'agent'
 
+  const items: { icon: LucideIcon; label: string; value: string; title?: string }[] = [
+    { icon: Tag, label: 'Policy', value: data.policy_version ?? '—' },
+    { icon: ScrollText, label: 'Rules', value: data.rule_version ?? '—' },
+    ...(data.input_fingerprint
+      ? [
+          {
+            icon: Fingerprint,
+            label: 'Inputs',
+            value: data.input_fingerprint.slice(0, 12),
+            title: 'A hash of the input snapshot, so the same inputs give the same analysis.',
+          },
+        ]
+      : []),
+    { icon: Tag, label: 'Run', value: data.analysis_id },
+  ]
+
   return (
     <section
-      className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border bg-card px-3 py-2 text-xs text-muted-foreground"
+      className="flex flex-wrap items-center gap-x-6 gap-y-3 rounded-xl border bg-card px-5 py-3.5"
       aria-label="Analysis provenance"
     >
-      <span className="flex items-center gap-1.5">
-        <Tag className="size-3.5 shrink-0" aria-hidden />
-        <span>Policy <span className="font-mono text-foreground">{data.policy_version ?? '—'}</span></span>
-      </span>
-      <span className="flex items-center gap-1.5">
-        <ScrollText className="size-3.5 shrink-0" aria-hidden />
-        <span>Rules <span className="font-mono text-foreground">{data.rule_version ?? '—'}</span></span>
-      </span>
-      {data.input_fingerprint && (
-        <span className="flex items-center gap-1.5" title="A hash of the input snapshot, so the same inputs give the same analysis.">
-          <Fingerprint className="size-3.5 shrink-0" aria-hidden />
-          <span>Inputs <span className="font-mono text-foreground">{data.input_fingerprint.slice(0, 12)}</span></span>
+      {items.map(({ icon: Icon, label, value, title }) => (
+        <span key={label} className="flex items-center gap-2" title={title}>
+          <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <span className="text-xs tracking-wide text-muted-foreground uppercase">{label}</span>
+          <span className="font-mono text-xs font-medium text-foreground">{value}</span>
         </span>
-      )}
-      <span className="flex items-center gap-1.5">
-        <span>Run <span className="font-mono text-foreground">{data.analysis_id}</span></span>
-      </span>
+      ))}
+
       {agent && (
         <span
           className={cn(
-            'ml-auto rounded border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] text-amber-900',
+            'ml-auto rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] text-amber-900',
             'dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200',
           )}
         >

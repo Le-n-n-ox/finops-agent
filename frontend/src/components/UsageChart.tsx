@@ -18,7 +18,17 @@ function niceMax(peak: number): number {
 }
 
 /** Usage over time vs current request, proposed request and p99, with business-event windows shaded. */
-export default function UsageChart({ result }: { result: WorkloadResult }) {
+export default function UsageChart({
+  result,
+  height = 'h-48',
+  heading = 'Usage over time',
+}: {
+  result: WorkloadResult
+  /** The chart's height class. The workload page gives it more room than the side column had. */
+  height?: string
+  /** Set to null when the surrounding card already says what the chart is. */
+  heading?: string | null
+}) {
   const [metric, setMetric] = useState<'cpu' | 'mem'>('cpu')
   const { proposal: p } = result
   const series = result.usage_series
@@ -45,7 +55,11 @@ export default function UsageChart({ result }: { result: WorkloadResult }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Usage over time</h3>
+        {heading ? (
+          <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{heading}</h3>
+        ) : (
+          <span />
+        )}
         <div className="flex gap-1" role="group" aria-label="Metric">
           {(['cpu', 'mem'] as const).map((m) => (
             <Button key={m} size="sm" variant={metric === m ? 'default' : 'outline'} aria-pressed={metric === m} onClick={() => setMetric(m)} className="h-7 px-2">
@@ -54,7 +68,7 @@ export default function UsageChart({ result }: { result: WorkloadResult }) {
           ))}
         </div>
       </div>
-      <div className="h-48" role="img" aria-label={`${metric === 'cpu' ? 'CPU' : 'Memory'} usage over time against request ${request ?? 'unknown'} ${unit}${proposed != null ? ` and proposed ${proposed} ${unit}` : ''}${events.length ? `, with ${events.map((e) => e.name).join(', ')} shaded` : ''}`}>
+      <div className={height} role="img" aria-label={`${metric === 'cpu' ? 'CPU' : 'Memory'} usage over time against request ${request ?? 'unknown'} ${unit}${proposed != null ? ` and proposed ${proposed} ${unit}` : ''}${events.length ? `, with ${events.map((e) => e.name).join(', ')} shaded` : ''}`}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={view.data} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
             <CartesianGrid stroke="var(--border)" vertical={false} />
