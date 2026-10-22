@@ -3,14 +3,44 @@ services:
     build: .
     container_name: finops_agent
     ports:
-      - "8000:8000"
+      # The HOST port is configurable: 8000 is a popular port and something else on the
+      # machine may already own it (another project's container, a local dev server).
+      # The port INSIDE the container is always 8000, so the frontend's proxy to
+      # finops_agent:8000 does not change when this does.
+      - "${FINOPS_API_PORT:-8000}:8000"
     environment:
       - AGENT_RUNTIME=${AGENT_RUNTIME:-local}
-      - METERLESS_BASE_URL=${METERLESS_BASE_URL:-http://host.docker.internal:8088/v1}
+      - DATA_SOURCE=${DATA_SOURCE:-local}
+      # auto: use the model server when one answers, fall back to the deterministic
+      # stand-in. simulated: pin the stand-in and never contact a model server.
+      - LLM_BACKEND=${LLM_BACKEND:-auto}
+
+      # ---- Local model server (Nightshift / meterless hotspot) ---------------
+      # The hotspot runs on the HOST and is an OpenAI-compatible API. A container
+      # reaches the host through `host.docker.internal` (Docker Desktop's alias
+      # for the host gateway) or through the host's LAN address. The container's
+      # own 127.0.0.1 is the container, not the host, so it never reaches the
+      # hotspot - that is the one address that does not work.
+      #
+      # METERLESS_CONTAINER_BASE_URL wins when set; otherwise build the URL
+      # from METERLESS_HOST_IP. Put METERLESS_HOST_IP in .env, e.g.
+      #   METERLESS_HOST_IP=192.168.1.7
+      # (the host's LAN address) and, if you prefer, override the whole URL
+      # with METERLESS_CONTAINER_BASE_URL.
+      - METERLESS_BASE_URL=${METERLESS_CONTAINER_BASE_URL:-http://${METERLESS_HOST_IP:-host.docker.internal}:8088/v1}
+      - METERLESS_MODEL=${METERLESS_MODEL:-local-runtime/llama-3.3-70b-instruct}
+      - METERLESS_API_KEY=${METERLESS_API_KEY}
+      # The token file is bind-mounted read-only at /run/nightshift (see
+      # volumes below), so the container can read the same token the host uses.
+      # METERLESS_CONTAINER_TOKEN_FILE wins when set; otherwise the mounted
+      # path is used. (The host-side METERLESS_TOKEN_FILE is a host path and
+      # would not resolve inside the container, so it is not reused here.)
+      - METERLESS_TOKEN_FILE=${METERLESS_CONTAINER_TOKEN_FILE:-/run/nightshift/proxy-token}
+
+      # ---- Optional integrations -------------------------------------------
       - NVIDIA_API_KEY=${NVIDIA_API_KEY}
       - NVIDIA_MODEL=${NVIDIA_MODEL:-meta/llama-3.1-70b-instruct}
       - NVIDIA_BASE_URL=${NVIDIA_BASE_URL:-https://integrate.api.nvidia.com/v1}
-      - DATA_SOURCE=${DATA_SOURCE:-local}
       - ZETARIS_BASE_URL=${ZETARIS_BASE_URL}
       - ZETARIS_ORG_ID=${ZETARIS_ORG_ID}
       - ZETARIS_USERNAME=${ZETARIS_USERNAME}
@@ -18,6 +48,16 @@ services:
       - ZETARIS_API_KEY=${ZETARIS_API_KEY}
     volumes:
       - ./data:/app/data
+      # Nightshift / meterless state directory, mounted read-only so the
+      # bearer token is visible inside the container at /run/nightshift.
+      # METERLESS_STATE_DIR must point at the directory that actually holds
+      # `proxy-token` on this machine, e.g.
+      #   Windows: C:/Users/<you>/AppData/Local/ai.meterless.runtime
+      #   macOS:   ~/Library/Application Support/ai.meterless.runtime
+      #   Linux:   /var/lib/meterless
+      # The default keeps `docker compose up` working on a machine without
+      # Nightshift installed (the directory is then simply empty).
+      - ${METERLESS_STATE_DIR:-./.nightshift}:/run/nightshift:ro
     restart: unless-stopped
 
   frontend:
@@ -26,7 +66,9 @@ services:
       dockerfile: frontend/Dockerfile
     container_name: finops_frontend
     ports:
-      - "5173:5173"
+      # The host port is configurable for the same reason as the API's: 5173 is what a local
+      # `npm run dev` uses, and the two collide. The port inside the container is always 5173.
+      - "${FINOPS_WEB_PORT:-5173}:5173"
     environment:
       - VITE_API_PROXY=http://finops_agent:8000
     depends_on:

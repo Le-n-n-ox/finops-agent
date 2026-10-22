@@ -12,10 +12,19 @@ const label = (d: string) => d.replaceAll('_', ' ')
  */
 export function buildReport(data: AnalysisResponse): string {
   const s = data.summary
+  // Name the reasoner that produced the numbers. A report that says a model ran when it did not
+  // is the one failure mode an audit document cannot have - and neither may it claim a stand-in
+  // ran when the response does not say that one did.
+  const reasoner = data.llm_backend === 'openai-compatible'
+    ? `Model: ${data.llm_model ?? 'live language model'}`
+    : data.llm_backend === 'simulated'
+      ? 'Model: none (deterministic stand-in, no live language model)'
+      : 'Model: none recorded (no live language model confirmed to have run)'
   const out: string[] = [
     '# Kubernetes FinOps Agent — Decision report',
     '',
     `Generated: ${data.generated_at} · Mode: ${data.mode} · Analysis: ${data.analysis_id}`,
+    reasoner,
     '',
     '> Recommendation-only. Savings are illustrative estimates. Patches are proposals for human review and are never applied automatically.',
     '',

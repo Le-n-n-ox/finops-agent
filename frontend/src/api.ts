@@ -5,6 +5,7 @@ import type {
   DashboardSummary,
   DecisionRecord,
   EventRow,
+  LLMStatus,
   ReportDetail,
   ReviewRequest,
   SimulationResult,
@@ -49,14 +50,17 @@ export interface Fetched<T> {
 /**
  * Try POST /api/analyze; fall back to bundled fixtures so the UI works before the backend does.
  * `scenario` is sent to the API (ignored until backend supports it) and selects the mock fixture.
+ *
+ * There is one reasoning path now - the agent cycle - so no mode is sent. The backend ignores the
+ * field anyway for older frontends.
  */
-export async function runAnalysis(scenario = 'all', mode = 'pipeline'): Promise<LoadResult> {
+export async function runAnalysis(scenario = 'all'): Promise<LoadResult> {
   let res: Response
   try {
     res = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scenario, mode }),
+      body: JSON.stringify({ scenario }),
     })
   } catch {
     // The backend is not reachable at all. Falling back to fixtures is honest here.
@@ -128,6 +132,16 @@ async function getJSON<T>(path: string): Promise<Fetched<T>> {
 /** Savings trend, potential-vs-held-back totals, and the top opportunities. */
 export function fetchDashboard(): Promise<Fetched<DashboardSummary>> {
   return getJSON<DashboardSummary>('/api/dashboard/summary')
+}
+
+/**
+ * Which model server the backend resolved, before any analysis has run.
+ *
+ * A failure here is not fatal: the analysis response carries the same facts, and the status
+ * endpoint may not exist on an older backend. The caller decides what to show.
+ */
+export function fetchLLMStatus(): Promise<Fetched<LLMStatus>> {
+  return getJSON<LLMStatus>('/api/llm/status')
 }
 
 /** Per-workload rows including the data-quality score and the latest human review action. */
