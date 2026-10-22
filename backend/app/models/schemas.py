@@ -483,6 +483,13 @@ class AnalysisResponse(BaseModel):
     input_fingerprint: str | None = None
     top_n_findings: int = 5
     top_opportunities: list["TopOpportunity"] = Field(default_factory=list)
+    # Which language model actually produced the reasoning behind this analysis.
+    # `llm_backend` is "openai-compatible" when a live model server answered, and "simulated"
+    # when the deterministic stand-in was used. Additive and defaulted, so payloads stored
+    # before this field existed still validate.
+    llm_backend: str = "simulated"
+    llm_model: str | None = None
+    llm_base_url: str | None = None
 
 
 class TopOpportunity(BaseModel):

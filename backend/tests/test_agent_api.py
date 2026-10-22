@@ -35,18 +35,66 @@ class TestAgentMode:
             assert "objections" in result
             assert result["evidence_trail"], "the agent must record the tools it called"
 
-    def test_agent_and_pipeline_agree_on_decisions(self, client):
-        agent = client.post("/api/analyze", json={"mode": "agent"}).json()
-        pipeline = client.post("/api/analyze", json={"mode": "pipeline"}).json()
-        agent_decisions = {r["workload_id"]: r["decision"] for r in agent["results"]}
-        pipeline_decisions = {r["workload_id"]: r["decision"] for r in pipeline["results"]}
-        assert agent_decisions == pipeline_decisions, \
-            "the adversarial phase may add objections but must not change any decision"
+    def test_the_agent_never_changes_a_deterministic_decision(self, client):
+        """The adversarial phase may downgrade an approval; it may never change anything else.
 
-    def test_pipeline_mode_still_works(self, client):
-        res = client.post("/api/analyze", json={"mode": "pipeline"})
-        assert res.status_code == 200
-        assert res.json()["summary"]["workloads_evaluated"] > 0
+        This is the invariant the review cycle exists to protect. It used to be checked by
+        comparing the API's two modes against each other - but `mode` no longer selects a
+        reasoning path, so that comparison would have compared the agent with itself and
+        proved nothing. The invariant is asserted against the deterministic pipeline itself,
+        which is the safety model underneath the agent cycle.
+        """
+        from app.models.schemas import DecisionStatus
+        from app.services.orchestrator import run_analysis_with_bundle
+
+        agent = client.post("/api/analyze", json={"mode": "agent"}).json()
+        pipeline, _bundle = run_analysis_with_bundle()
+
+        agent_decisions = {r["workload_id"]: r["decision"] for r in agent["results"]}
+        pipeline_decisions = {r.workload_id: r.decision.value for r in pipeline.results}
+
+        assert set(agent_decisions) == set(pipeline_decisions), \
+            "the agent must reach the same workloads as the deterministic pipeline"
+        for workload_id, decision in agent_decisions.items():
+            deterministic = pipeline_decisions[workload_id]
+            if decision != deterministic:
+                assert (deterministic == DecisionStatus.APPROVED.value
+                        and decision == DecisionStatus.NEEDS_REVIEW.value), (
+                    f"{workload_id}: the agent changed {deterministic} to {decision}. The only "
+                    "change it may make is downgrading an approval to a human review.")
+
+    def test_the_agent_never_raises_the_savings(self, client):
+        """The adversarial phase may lower a saving; it may never invent one.
+
+        A decision that stays the same but claims more money is still a broken decision, and the
+        reviewer is the one who has to catch it.
+        """
+        from app.services.orchestrator import run_analysis_with_bundle
+
+        agent = client.post("/api/analyze", json={"mode": "agent"}).json()
+        pipeline, _bundle = run_analysis_with_bundle()
+
+        agent_savings = {r["workload_id"]: r["monthly_savings_estimate_usd"] for r in agent["results"]}
+        pipeline_savings = {r.workload_id: r.monthly_savings_estimate_usd for r in pipeline.results}
+
+        for workload_id, savings in agent_savings.items():
+            assert savings <= pipeline_savings[workload_id] + 0.01, \
+                f"{workload_id}: the agent claimed more savings than the deterministic critic did"
+
+    def test_the_mode_field_is_accepted_and_ignored(self, client):
+        """`mode` is still accepted by older frontends, but it no longer selects a path.
+
+        The agent cycle always runs. A frontend that still sends `mode: "pipeline"` must get the
+        agent cycle's answer, not a second, different reasoning path.
+        """
+        legacy = client.post("/api/analyze", json={"mode": "pipeline"})
+        assert legacy.status_code == 200
+        body = legacy.json()
+        assert body["mode"] == "agent", "the response always says which path actually ran"
+        assert body["summary"]["workloads_evaluated"] > 0
+        # The agent ran, so the agent's own fields are present even in "pipeline" mode.
+        for result in body["results"]:
+            assert result["cycles"], "the agent cycle ran, so its review cycle is reported"
 
     def test_confidence_differs_between_safe_and_risky_workloads(self, client):
         body = client.post("/api/analyze", json={"mode": "agent"}).json()
@@ -74,15 +122,18 @@ class TestAgentMode:
             assert "historical_lessons" in result
 
     def test_agent_mode_carries_the_usage_chart(self, client):
-        """Agent mode must return the same usage series the pipeline does.
+        """The agent path must return the same usage series the pipeline does.
 
         The chart is a UI-only field. If the agent path skips it, the mode that showcases the new
         reasoning is also the mode where the evidence chart is blank.
         """
+        from app.services.orchestrator import run_analysis_with_bundle
+
         agent = client.post("/api/analyze", json={"mode": "agent"}).json()
-        pipeline = client.post("/api/analyze", json={"mode": "pipeline"}).json()
+        pipeline, _bundle = run_analysis_with_bundle()
+
         agent_points = {r["workload_id"]: len(r.get("usage_series") or []) for r in agent["results"]}
-        pipeline_points = {r["workload_id"]: len(r.get("usage_series") or []) for r in pipeline["results"]}
+        pipeline_points = {r.workload_id: len(r.usage_series or []) for r in pipeline.results}
         assert agent_points == pipeline_points
         assert any(count > 0 for count in agent_points.values()), "the agent path produced no chart data"
 
@@ -111,16 +162,21 @@ class TestSuppressedSavings:
         assert summary["held_back_usd"] == pytest.approx(
             summary["potential_savings_usd"] - summary["estimated_monthly_savings_usd"], abs=0.01)
 
-    def test_pipeline_mode_reports_no_agent_confidence(self, client):
-        """Pipeline mode runs no agent, so there is no agent confidence to report.
+    def test_the_deterministic_pipeline_reports_no_agent_confidence(self, client):
+        """The deterministic pipeline runs no agent, so it reports no agent confidence.
 
         A default of 0.0 would be read as "the agent is certain of nothing" rather than
         "there was no agent", and would sit next to the proposal's real score of ~90.
+
+        The API has one reasoning path now, so this is asserted against the pipeline function
+        itself rather than against a `mode` the API ignores.
         """
-        body = client.post("/api/analyze", json={"mode": "pipeline"}).json()
-        for result in body["results"]:
-            assert result["confidence_score"] is None
-            assert result["proposal"]["confidence"]["score"] > 0, "the proposal still has its own score"
+        from app.services.orchestrator import run_analysis_with_bundle
+
+        response, _bundle = run_analysis_with_bundle()
+        for result in response.results:
+            assert result.confidence_score is None
+            assert result.proposal.confidence.score > 0, "the proposal still has its own score"
 
     def test_agent_mode_reports_agent_confidence(self, client):
         body = client.post("/api/analyze", json={"mode": "agent"}).json()
