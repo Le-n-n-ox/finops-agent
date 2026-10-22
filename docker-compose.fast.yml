@@ -1,0 +1,30 @@
+# The fast demo: the deterministic stand-in instead of the live model.
+#
+# A full analysis is a multi-turn conversation with the model server for every workload. On a
+# machine with no GPU that is minutes per run, which is the wrong thing to be looking at while
+# you are trying to show somebody what the tool does.
+#
+# This override pins the stand-in, which answers the same turns from the same tools and produces
+# the same decisions - it is the same agent cycle, with a scripted reasoner instead of a local
+# 70B model. The whole run finishes in seconds.
+#
+#     docker compose -f docker-compose.yml -f docker-compose.fast.yml up -d
+#
+# or, which does the same thing and is easier to remember:
+#
+#     python scripts/demo_mode.py fast
+#
+# To go back to the live model:
+#
+#     python scripts/demo_mode.py live
+#
+# The override is a separate file rather than a flag on the main one so that "which mode am I
+# in?" is answerable by looking at how the stack was started - and so the default stays the
+# live model, which is the one that proves anything.
+services:
+  finops_agent:
+    environment:
+      # The stand-in answers the agent's turns from the same tools. The response says
+      # `"llm_backend": "simulated"`, the header badge says so, and the provenance strip says
+      # so - nothing about the run is dressed up as something it was not.
+      - LLM_BACKEND=simulated

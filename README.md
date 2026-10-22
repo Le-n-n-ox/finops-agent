@@ -213,6 +213,27 @@ FINOPS_WEB_PORT=5173                   # published as host:5173 -> container:517
 
 The ports **inside** the containers are always 8000 and 5173, so the frontend's proxy to `finops_agent:8000` does not change when the host port does.
 
+### The fast demo
+
+A full analysis is a multi-turn conversation with the model server for every workload. On a
+machine with no GPU that is minutes per run — which is the wrong thing to be looking at while
+you are trying to show somebody what the tool does.
+
+```bash
+python scripts/demo_mode.py fast     # the deterministic stand-in: the whole run in seconds
+python scripts/demo_mode.py live     # back to the real model server
+python scripts/demo_mode.py status   # which one is running
+```
+
+The stand-in answers the same turns from the same tools and produces the same decisions — it is
+the same agent cycle with a scripted reasoner instead of a local model. Nothing about the run is
+dressed up as something it was not: the response carries `"llm_backend": "simulated"`, the
+header badge says so, and the provenance strip says so.
+
+It is a compose override rather than a flag on the main compose file, so the default stays the
+live model — the one that proves anything — and "which mode am I in?" is answerable by looking
+at how the stack was started.
+
 The backend container needs to reach the model server, which runs on the **host**. A container reaches the host through `host.docker.internal` (Docker Desktop's alias for the host gateway) or through the host's LAN address; the container's own `127.0.0.1` is the container, not the host, so it never reaches the hotspot. The defaults already use `host.docker.internal`, so this usually needs no configuration. To point at the host's LAN address instead:
 
 ```bash
@@ -273,7 +294,8 @@ backend/tests/     Backend tests
 data/              Demo fixtures and policy/cost configuration
 docs/              Shared contract and integration guides
 frontend/          React + TypeScript + Vite application
-scripts/            Fixture generation and integration checks (check_model.py diagnoses the model server)
+scripts/            Fixture generation and integration checks (check_model.py diagnoses the model server;
+                   demo_mode.py switches the stack between the live model and the stand-in)
 ```
 
 ```
