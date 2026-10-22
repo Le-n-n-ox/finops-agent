@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Check, ClipboardCopy, Download, FileCode2, GitCommitVertical, Info, ListChecks, Lock, TriangleAlert, X } from 'lucide-react'
+import { Calculator, Check, ClipboardCopy, Download, FileCode2, GitCommitVertical, Info, ListChecks, Lock, Scale, ShieldAlert, TriangleAlert, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { CHECK_STYLE, DECISIONS, DecisionBadge, RiskText } from './DecisionBadge'
+import ReviewCyclePanel from './ReviewCyclePanel'
 import ReviewForm from './ReviewForm'
+import ReviewState from './ReviewState'
+import Simulator from './Simulator'
 import UsageChart from './UsageChart'
 import YamlDiff from './YamlDiff'
 import { downloadText } from '@/lib/report'
@@ -39,7 +42,7 @@ function UsageBar({ label, unit, request, proposed, p99 }: BarProps) {
       </div>
       <div className="relative h-2.5 rounded-full bg-muted" role="img" aria-label={`${label}: p99 usage ${p99 ?? 'unknown'} of ${request} ${unit} requested`}>
         {p99 != null && <div className="h-full rounded-full bg-primary/70 transition-[width] duration-700 ease-out motion-reduce:transition-none" style={{ width: `${on ? pct(p99) : 0}%` }} />}
-        {proposed != null && <div className="absolute -top-0.5 h-3.5 w-0.5 rounded bg-amber-500 transition-[left] duration-700 ease-out motion-reduce:transition-none" style={{ left: `${on ? pct(proposed) : 0}%` }} title={`Proposed ${proposed} ${unit}`} />}
+        {proposed != null && <div className="absolute -top-0.5 h-3.5 w-0.5 rounded bg-violet-500 transition-[left] duration-700 ease-out motion-reduce:transition-none" style={{ left: `${on ? pct(proposed) : 0}%` }} title={`Proposed ${proposed} ${unit}`} />}
       </div>
     </div>
   )
@@ -48,8 +51,18 @@ function UsageBar({ label, unit, request, proposed, p99 }: BarProps) {
 const delta = (cur: number | null, next: number | null | undefined) =>
   cur && next != null ? `${Math.round(((next - cur) / cur) * 100)}%` : '—'
 
-export default function DetailPanel({ result, reportId, className, onClose }: { result: WorkloadResult; reportId?: string; className?: string; onClose?: () => void }) {
+export default function DetailPanel({ result, reportId, className, onClose, simulatorUnavailable }: {
+  result: WorkloadResult
+  reportId?: string
+  className?: string
+  onClose?: () => void
+  /** Why the what-if cannot run, if it cannot. */
+  simulatorUnavailable?: string
+}) {
   const [copied, setCopied] = useState(false)
+  // Bumped when a review is recorded, so the history below re-reads the audit log instead of
+  // still claiming nothing has been reviewed.
+  const [reviewVersion, setReviewVersion] = useState(0)
   const { proposal: p } = result
 
   const copy = async () => {
@@ -71,7 +84,7 @@ export default function DetailPanel({ result, reportId, className, onClose }: { 
   }
 
   return (
-    <Card className={cn('animate-in fade-in slide-in-from-right-4 duration-300 motion-reduce:animate-none lg:sticky lg:top-6', className)}>
+    <Card data-print-tabs className={cn('animate-in fade-in slide-in-from-right-4 duration-300 motion-reduce:animate-none lg:sticky lg:top-6', className)}>
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-lg">{result.workload_id}</CardTitle>
@@ -84,21 +97,37 @@ export default function DetailPanel({ result, reportId, className, onClose }: { 
         <p className={cn('mt-2 rounded-md border-l-4 p-3 text-sm', CALLOUT[result.decision])}>
           <span className="font-medium">{DECISIONS[result.decision].label}: </span>{result.reason}
         </p>
+        {!!p.suppressed_saving_usd && (
+          <p className="mt-2 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+            <ShieldAlert className="mt-0.5 size-4 shrink-0" aria-hidden />
+            <span>
+              The optimizer found <span className="font-medium tabular-nums">${p.suppressed_saving_usd.toFixed(2)}/mo</span> here
+              and a safety rule refused it, so the request is unchanged.
+              {p.suppressed_proposal && (
+                <> It had proposed {p.suppressed_proposal.cpu_request_millicores} m CPU and {p.suppressed_proposal.memory_request_mib} MiB memory.</>
+              )}
+            </span>
+          </p>
+        )}
       </CardHeader>
       <CardContent>
         <Tabs defaultValue="evidence" key={result.workload_id}>
-          <TabsList>
+          <TabsList className="print:hidden">
             <TabsTrigger value="evidence"><Info aria-hidden />Evidence</TabsTrigger>
+            <TabsTrigger value="cycle"><Scale aria-hidden />Cycle</TabsTrigger>
+            <TabsTrigger value="whatif"><Calculator aria-hidden />What-if</TabsTrigger>
             <TabsTrigger value="critic"><ListChecks aria-hidden />Critic</TabsTrigger>
             <TabsTrigger value="patch"><FileCode2 aria-hidden />Patch</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="evidence" className="space-y-5">
+          {/* Every panel stays mounted: Radix unmounts inactive tabs, which would leave a printed
+              report containing only whichever tab was open when the reviewer hit print. */}
+          <TabsContent value="evidence" forceMount className="space-y-5">
             <UsageChart result={result} />
             <div className="space-y-3">
               <UsageBar label="CPU" unit="m" request={p.current.cpu_request_millicores} proposed={p.proposed?.cpu_request_millicores} p99={p.metrics.cpu_p99} />
               <UsageBar label="Memory" unit="MiB" request={p.current.memory_request_mib} proposed={p.proposed?.memory_request_mib} p99={p.metrics.memory_p99} />
-              <p className="text-xs text-muted-foreground"><span className="mr-1 inline-block h-2.5 w-0.5 translate-y-0.5 rounded bg-amber-500" />Proposed request</p>
+              <p className="text-xs text-muted-foreground"><span className="mr-1 inline-block h-2.5 w-0.5 translate-y-0.5 rounded bg-violet-500" />Proposed request</p>
             </div>
             <table className="w-full text-sm">
               <thead className="text-left text-xs text-muted-foreground"><tr><th className="pb-1 font-medium" /><th className="pb-1 font-medium">Current</th><th className="pb-1 font-medium">Proposed</th><th className="pb-1 text-right font-medium">Δ</th></tr></thead>
@@ -113,10 +142,36 @@ export default function DetailPanel({ result, reportId, className, onClose }: { 
               <dt className="text-muted-foreground">Memory p95 / p99</dt><dd className="tabular-nums">{p.metrics.memory_p95 ?? '—'} / {p.metrics.memory_p99 ?? '—'} MiB</dd>
               <dt className="text-muted-foreground">Limits (context)</dt><dd className="tabular-nums">{p.current.cpu_limit_millicores ?? '—'} m / {p.current.memory_limit_mib ?? '—'} MiB</dd>
             </dl>
-            {p.confidence && <p className="text-sm"><span className="font-medium">Confidence:</span> {p.confidence.score}/100 ({p.confidence.label})</p>}
+            {p.confidence && (
+              <section className="space-y-2 rounded-md border p-3">
+                <p className="text-sm">
+                  <span className="font-medium">Proposal confidence:</span> {p.confidence.score}/100 ({p.confidence.label})
+                </p>
+                {p.confidence.explanation && <p className="text-xs text-muted-foreground">{p.confidence.explanation}</p>}
+                {!!p.confidence.factors?.length && (
+                  <ul className="space-y-1 border-t pt-2">
+                    {p.confidence.factors.map((f) => (
+                      <li key={f.name} className="text-xs">
+                        <span className="font-medium">{f.name}</span>
+                        <span className="ml-1 tabular-nums text-muted-foreground">
+                          {f.score}/100 (weight {f.weight})
+                        </span>
+                        <span className="block text-muted-foreground">{f.explanation}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            )}
             {result.confidence_score != null && (
               <div className="space-y-1 rounded-md border p-3">
-                <p className="text-sm"><span className="font-medium">Agent confidence:</span> {result.confidence_score.toFixed(1)}/100</p>
+                <p className="text-sm">
+                  <span className="font-medium">Verification confidence:</span> {result.confidence_score.toFixed(1)}/100
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  How much of what the agent reported was traced back to a tool result. This scores the
+                  agent&rsquo;s reasoning; the score above scores the proposal itself.
+                </p>
                 {result.confidence_basis && <p className="text-xs text-muted-foreground">{result.confidence_basis}</p>}
               </div>
             )}
@@ -157,7 +212,15 @@ export default function DetailPanel({ result, reportId, className, onClose }: { 
             </section>}
           </TabsContent>
 
-          <TabsContent value="critic" className="space-y-4">
+          <TabsContent value="cycle" forceMount className="space-y-4">
+            <ReviewCyclePanel cycles={result.cycles} lessons={result.historical_lessons} />
+          </TabsContent>
+
+          <TabsContent value="whatif" forceMount className="space-y-4 print:hidden">
+            <Simulator result={result} disabledReason={simulatorUnavailable} />
+          </TabsContent>
+
+          <TabsContent value="critic" forceMount className="space-y-4">
             <ol className="relative space-y-4 border-l pl-5">
               <li>
                 <GitCommitVertical className="absolute -left-[9px] size-[18px] bg-card text-muted-foreground" aria-hidden />
@@ -194,11 +257,13 @@ export default function DetailPanel({ result, reportId, className, onClose }: { 
                 reportId={reportId}
                 workloadId={result.workload_id}
                 canAccept={result.decision === 'approved'}
+                onRecorded={() => setReviewVersion((v) => v + 1)}
               />
             )}
+            <ReviewState workloadId={result.workload_id} reportId={reportId} refreshKey={reviewVersion} />
           </TabsContent>
 
-          <TabsContent value="patch" className="space-y-3">
+          <TabsContent value="patch" forceMount className="space-y-3">
             <p className="flex items-start gap-2 rounded-md border bg-muted/50 p-2.5 text-xs text-muted-foreground">
               <Lock className="mt-0.5 size-3.5 shrink-0" aria-hidden />Proposed patch for human review. It is never applied automatically.
             </p>

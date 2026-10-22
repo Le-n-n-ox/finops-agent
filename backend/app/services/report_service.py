@@ -73,7 +73,11 @@ def render_markdown_report(analysis: AnalysisResponse) -> str:
              if proposal.savings_estimate and proposal.savings_estimate.pricing_available else
              f"Relative request allocation reduction: {proposal.savings_estimate.total_request_reduction_pct:.2f}%; "
              "currency savings are unavailable.") if proposal.savings_estimate else
-            f"Potential monthly savings estimate: ${proposal.estimated_monthly_saving_usd:.2f}.",
+             f"Potential monthly savings estimate: ${proposal.estimated_monthly_saving_usd:.2f}.",
+            *((f"Suppressed by a safety rule: ${proposal.suppressed_saving_usd:.2f}/month found and not "
+               f"recommended (proposed {proposal.suppressed_proposal.cpu_request_millicores} millicores CPU / "
+               f"{proposal.suppressed_proposal.memory_request_mib} MiB memory).")
+              if proposal.suppressed_saving_usd and proposal.suppressed_proposal else []),
             "",
             (f"Confidence: {proposal.confidence.score:.1f}/100 ({proposal.confidence.label}). "
              f"Priority: {proposal.priority_score:.1f}/100."
@@ -88,6 +92,24 @@ def render_markdown_report(analysis: AnalysisResponse) -> str:
             lines.extend(f"- **{check.name} [{check.code}] — {check.status.value}:** {check.message}" for check in result.checks)
         else:
             lines.append("- No critic checks were recorded.")
+        if result.cycles:
+            lines.extend(["", "### Review cycle", ""])
+            for cycle in result.cycles:
+                verdict = f" — verdict: `{cycle.verdict}`" if cycle.verdict else ""
+                lines.append(f"**{cycle.role.capitalize()}{verdict}**")
+                if cycle.summary:
+                    lines.append("")
+                    lines.append(cycle.summary)
+                if cycle.steps:
+                    lines.append("")
+                    lines.append("Tools called:")
+                    lines.extend(f"- `{step.tool}`" + (f" — {step.thought}" if step.thought else "")
+                                 for step in cycle.steps)
+                lines.append("")
+        if result.historical_lessons:
+            lines.extend(["### Historical lessons (from prior human reviews)", ""])
+            lines.extend(f"- {lesson}" for lesson in result.historical_lessons)
+            lines.append("")
         if result.objections:
             lines.extend(["", "Adversarial review objections:"])
             lines.extend(f"- **{objection.severity.upper()} [{objection.code}]:** {objection.message}"

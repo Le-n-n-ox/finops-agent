@@ -2,6 +2,12 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Inside Docker Compose the backend is reachable as the `finops_agent` service; the compose file
+// passes that in as VITE_API_PROXY. Running the frontend straight from the shell has to default to
+// the backend on localhost, or every /api call fails and the app silently falls back to mock data.
+const apiTarget = process.env.VITE_API_PROXY ?? 'http://127.0.0.1:8000';
 
 export default defineConfig({
   plugins: [
@@ -10,7 +16,7 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, './src'),
+      '@': path.resolve(path.dirname(fileURLToPath(import.meta.url)), './src'),
     },
   },
   server: {
@@ -21,7 +27,7 @@ export default defineConfig({
     },
     proxy: {
       '/api': {
-        target: 'http://finops_agent:8000',
+        target: apiTarget,
         changeOrigin: true,
         secure: false,
       }

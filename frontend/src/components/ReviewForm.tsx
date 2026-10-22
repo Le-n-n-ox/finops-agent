@@ -29,6 +29,7 @@ export default function ReviewForm({ reportId, workloadId, canAccept, onRecorded
   const [resource, setResource] = useState('')
   const [guidance, setGuidance] = useState('')
   const [saving, setSaving] = useState(false)
+  const [outcome, setOutcome] = useState('')
 
   const submit = async () => {
     setSaving(true)
@@ -41,10 +42,11 @@ export default function ReviewForm({ reportId, workloadId, canAccept, onRecorded
         rejection_reasons: reason.trim() ? [reason.trim()] : [],
         resource: resource.trim() || null,
         reviewer_guidance: guidance.trim() || null,
+        outcome: outcome.trim() || null,
       })
       toast.success('Review recorded')
       setOpen(false)
-      setComment(''); setReason(''); setGuidance(''); setResource('')
+      setComment(''); setReason(''); setGuidance(''); setResource(''); setOutcome('')
       onRecorded?.()
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Could not record the review')
@@ -141,6 +143,21 @@ export default function ReviewForm({ reportId, workloadId, canAccept, onRecorded
           className="w-full rounded-md border bg-background px-2 py-1 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         />
       </label>
+
+      {action === 'ACCEPTED_FOR_IMPLEMENTATION' && (
+        <label className="block space-y-1 text-xs">
+          <span className="font-medium">Outcome (optional)</span>
+          <input
+            value={outcome}
+            onChange={(e) => setOutcome(e.target.value)}
+            placeholder="e.g. applied to one replica, no throttling after 30 min"
+            className="h-8 w-full rounded-md border bg-background px-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          />
+          <span className="block text-muted-foreground">
+            Recorded against the decision so a later reviewer can see whether the change actually worked.
+          </span>
+        </label>
+      )}
 
       <Button size="sm" onClick={() => void submit()} disabled={saving}>
         <Check aria-hidden />{saving ? 'Recording…' : 'Record review'}

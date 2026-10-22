@@ -306,8 +306,13 @@ def _result(proposal: OptimizationProposal, decision: DecisionStatus, risk: Risk
                 "cpu_request_reduction_pct": 0.0, "memory_request_reduction_pct": 0.0,
                 "total_request_reduction_pct": 0.0,
                 "assumptions": ["No request reduction is recommended while an incident or event deferral is active."]})
+        # Move what the optimizer found into the suppressed_* fields rather than erasing it. A
+        # refusal the reviewer cannot see the cost of is indistinguishable from the tool having
+        # found nothing at all.
         proposal = proposal.model_copy(update={"proposed": None, "estimated_monthly_saving_usd": 0.0,
             "savings_estimate": estimate, "priority_score": 0.0,
+            "suppressed_saving_usd": proposal.estimated_monthly_saving_usd,
+            "suppressed_proposal": proposal.proposed,
             "findings": [finding for finding in proposal.findings
                          if not finding.code.startswith("OVERPROVISIONED_")]})
     elif decision is not DecisionStatus.APPROVED:
