@@ -84,7 +84,50 @@ body {
 
   body { font-family: var(--font-sans); }
 
-  @media print {
-  body { background: none; }
+/* Radix Tabs unmounts the panels that are not selected. On screen that is what you want; in a
+   printed report it silently drops most of the audit trail. So every panel stays mounted and CSS
+   decides what is visible. */
+@media screen {
+  [data-print-tabs] [role="tabpanel"][data-state="inactive"] { display: none; }
+}
+
+@media print {
+  @page { margin: 14mm; }
+
+  /* Paper is white. A dark-mode theme sets --foreground to near-white and --card to a dark
+     navy, which prints as white text on white paper. So the light palette is forced for the
+     print, whatever the screen is showing. */
+  :root, .dark {
+    --background: oklch(0.985 0.002 247);
+    --foreground: oklch(0.208 0.042 265);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.208 0.042 265);
+    --muted: oklch(0.968 0.007 248);
+    --muted-foreground: oklch(0.554 0.046 257);
+    --border: oklch(0.929 0.013 256);
+    --primary: oklch(0.52 0.10 185);
+    --primary-foreground: oklch(0.99 0 0);
+  }
+
+  html, body { background: #fff !important; color: var(--foreground) !important; }
+  body { background-image: none !important; }
+
   * { animation: none !important; box-shadow: none !important; }
+
+  /* The verdict colour is the point of the callout, so keep the fills. */
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* A card split across a page break is unreadable. */
+  section, article, li, table, pre, figure, [data-print-tabs] { break-inside: avoid; }
+  .recharts-wrapper, .recharts-surface { break-inside: avoid; }
+
+  /* The detail panel is a sticky side column on screen; on paper it should read in full width. */
+  [data-print-tabs] { position: static !important; width: 100% !important; max-width: none !important; }
+  [data-print-tabs] [role="tabpanel"] { display: block !important; }
+  [data-print-tabs] [role="tabpanel"] + [role="tabpanel"] { margin-top: 1.25rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+
+  /* Headings should not be stranded at the foot of a page. */
+  h1, h2, h3, h4 { break-after: avoid; }
+
+  a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 0.75em; color: #555; }
 }

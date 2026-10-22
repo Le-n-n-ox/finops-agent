@@ -14,6 +14,7 @@ from typing import Callable, Any
 
 from app.integrations.meterless_runner import AgentRunner, get_runner
 from app.models.schemas import (
+    AgentAuditLog,
     AnalysisResponse,
     AnalysisSummary,
     CriticPolicy,
@@ -30,6 +31,7 @@ from app.services.fingerprints import fingerprint
 from app.services.report_service import with_patch
 from app.services.store import Store
 from app.services.agent_orchestrator import AgentOrchestrator
+from app.services.validation_service import validation_from_bundle
 
 DISCLAIMER = "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
 
@@ -133,65 +135,145 @@ def run_analysis_with_bundle(
     )
     if "input_issues" in AnalysisResponse.model_fields:
         payload["input_issues"] = bundle.issues
+    if "data_health" in AnalysisResponse.model_fields:
+        # The same validation the /api/validation endpoint returns, computed from the bundle that
+        # produced this analysis. The UI shows metric completeness and freshness per workload, so
+        # a reviewer can see which recommendations rest on thin data.
+        payload["data_health"] = validation_from_bundle(bundle)
     return AnalysisResponse(**payload), bundle
 
 
-def run_analysis(now: datetime | None = None, **kwargs) -> AnalysisResponse:
+async def run_analysis(now: datetime | None = None, **kwargs) -> AnalysisResponse:
     """
-    The primary entry point for analysis. Now uses the AgentOrchestrator
-    to perform a deep, investigative review of all workloads.
+    The primary entry point for analysis. Uses the AgentOrchestrator to perform a deep,
+    investigative review of all workloads through the Proposer -> Critic -> Judge cycle.
     """
-    print("DEBUG: [orchestrator] run_analysis called - triggering agentic loop")
     # Using the Simulated LLM for prototype demonstration
     from app.services.simulated_llm import SimulatedLLMClient
     llm_client = SimulatedLLMClient()
 
-    # We reuse the agentic logic to perform the analysis
-    response, _ = run_analysis_agentic(now=now, llm_client=llm_client, **kwargs)
+    response, _ = await run_analysis_agentic(now=now, llm_client=llm_client, **kwargs)
     return response
 
 
-def run_analysis_agentic(
+async def run_analysis_agentic(
     now: datetime | None = None,
     llm_client: Any = None,
     **kwargs
 ) -> tuple[AnalysisResponse, InputBundle]:
     """
     Run the agentic reasoning loop for all workloads.
-    Returns the same AnalysisResponse as the pipeline for UI compatibility,
-    but can be extended to include the AuditLogs.
+
+    Each workload goes through the full Proposer -> Critic -> Judge cycle. The agent's results ARE
+    the results: they are aggregated here, not discarded in favour of a second deterministic run.
+    A per-workload failure falls back to the deterministic pipeline for that workload only.
     """
-    bundle = default_inputs()
+    bundle = kwargs.get("bundle") or default_inputs()
     now = now or bundle.policy.simulation_now or datetime.now(timezone.utc)
 
-    # In a real system, the llm_client would be injected via deps
+    # In a real system, the llm_client would be injected via deps. The simulated client stands in
+    # for it so the cycle can run without a model behind it.
     if llm_client is None:
-        # This is where you'd initialize your actual LLM (Claude/OpenAI/etc)
-        # For now, we'll use a Mock LLM to ensure the pipeline doesn't crash
-        from unittest.mock import AsyncMock
-        llm_client = AsyncMock()
+        from app.services.simulated_llm import SimulatedLLMClient
+        llm_client = SimulatedLLMClient()
 
-    orchestrator = AgentOrchestrator(bundle, llm_client)
+    orchestrator = AgentOrchestrator(bundle, llm_client, store=kwargs.get("store"))
+    specs = {spec.name: spec for spec in bundle.services}
     results: list[WorkloadResult] = []
+    audits: list[AgentAuditLog] = []
 
     for spec in bundle.services:
         try:
-            res, _audit = orchestrator.analyze_workload_agentic(spec.name)
-            results.append(res)
-        except Exception as e:
-            # Fail-safe: if agent crashes, fallback to deterministic pipeline for this workload
+            res, audit = await orchestrator.analyze_workload_agentic(spec.name)
+            audits.append(audit)
+            # Attach the validated patch exactly as the deterministic pipeline does.
+            patched = with_patch(res, specs.get(spec.name))
+        except Exception:  # noqa: BLE001 - one bad workload must not sink the whole analysis
+            # Fail-safe: if the agent crashes, fallback to the deterministic pipeline for this workload
             from app.services.optimizer_service import analyze_workload
-            prop = analyze_workload(spec, [], bundle.policy.optimizer, now)
-            res = evaluate(prop, bundle, now)
-            results.append(res)
+            prop = analyze_workload(spec, [r for r in bundle.usage_rows if r.service == spec.name],
+                                    bundle.policy.optimizer, now, bundle.cost_model,
+                                    incidents=bundle.incidents, events=bundle.events)
+            patched = with_patch(evaluate(prop, bundle, now), specs.get(spec.name))
+        # The usage chart and event band are UI-only fields. The agent path must attach them too,
+        # or "Agent cycle" mode renders an empty chart where the pipeline shows 720 points.
+        extra = _chart_data(spec.name, bundle, now)
+        results.append(patched.model_copy(update=extra) if extra else patched)
 
-    # Re-use aggregation logic from run_analysis_with_bundle
-    # We call the original logic but provide our agent-generated results
-    return run_analysis_with_bundle(now, inputs_fn=default_inputs, proposals_fn=None)[0], bundle
+    results.sort(key=lambda result: -(result.proposal.priority_score or 0.0))
+    return _aggregate(results, bundle, now), bundle
 
 
-def run_and_record(store: Store, now: datetime | None = None, **kwargs) -> AnalysisResponse:
-    """Run the pipeline with the saved policy, then persist the report + immutable decision snapshots."""
-    response, bundle = run_analysis_with_bundle(now, policy=store.get_policy(), **kwargs)
+def _aggregate(results: list[WorkloadResult], bundle: InputBundle, now: datetime) -> AnalysisResponse:
+    """Turn a list of judged results into the AnalysisResponse the UI consumes."""
+    summary = AnalysisSummary(
+        workloads_evaluated=len(results),
+        approved=sum(r.decision is DecisionStatus.APPROVED for r in results),
+        deferred=sum(r.decision is DecisionStatus.DEFERRED for r in results),
+        rejected=sum(r.decision is DecisionStatus.REJECTED for r in results),
+        needs_review=sum(r.decision is DecisionStatus.NEEDS_REVIEW for r in results),
+        no_change=sum(r.decision is DecisionStatus.NO_CHANGE for r in results),
+        estimated_monthly_savings_usd=round(
+            sum(r.monthly_savings_estimate_usd for r in results if r.decision is DecisionStatus.APPROVED), 2),
+    )
+
+    warnings = [DISCLAIMER]
+    if bundle.policy.simulation_now:
+        warnings.append(f"Demo clock fixed at {bundle.policy.simulation_now.isoformat()}.")
+
+    top_n = bundle.policy.critic.top_n_findings
+    top_opportunities = [TopOpportunity(
+        workload_id=result.workload_id,
+        monthly_savings_usd=result.monthly_savings_estimate_usd,
+        priority_score=result.proposal.priority_score or 0.0,
+        confidence_score=result.confidence_score or (
+            result.proposal.confidence.score if result.proposal.confidence else 0.0),
+        risk_level=result.risk_level,
+    ) for result in results if result.decision is DecisionStatus.APPROVED
+        and result.proposal.proposed is not None][:top_n]
+
+    payload: dict = dict(
+        analysis_id=f"ANL-{now:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}",
+        generated_at=now,
+        mode="agent" if bundle.policy.simulation_now else os.getenv("DATA_SOURCE", "local"),
+        summary=summary,
+        results=results,
+        warnings=warnings,
+        policy_version=bundle.policy.critic.version,
+        rule_version=bundle.policy.critic.rule_version,
+        input_fingerprint="sha256:" + hashlib.sha256(bundle.model_dump_json().encode("utf-8")).hexdigest(),
+        top_n_findings=top_n,
+        top_opportunities=top_opportunities,
+    )
+    if "input_issues" in AnalysisResponse.model_fields:
+        payload["input_issues"] = bundle.issues
+    if "data_health" in AnalysisResponse.model_fields:
+        payload["data_health"] = validation_from_bundle(bundle)
+    return AnalysisResponse(**payload)
+
+
+async def run_and_record(store: Store, now: datetime | None = None, *, mode: str = "pipeline", **kwargs) -> AnalysisResponse:
+    """Run the analysis with the saved policy, then persist the report + immutable decision snapshots.
+
+    `mode` selects the reasoning path:
+      "pipeline" - the deterministic optimizer + critic. Reproducible, no LLM involved.
+      "agent"    - the Proposer -> Critic -> Judge cycle. The deterministic critic still owns every
+                   final decision; the adversarial phase can only downgrade a recommendation.
+    """
+    if mode == "agent":
+        response, bundle = await _run_agentic_with_policy(store, now, **kwargs)
+    else:
+        response, bundle = run_analysis_with_bundle(now, policy=store.get_policy(), **kwargs)
     store.save_report(response, {r.workload_id: fingerprint(r.workload_id, bundle) for r in response.results}, bundle.policy.critic.version)
     return response
+
+
+async def _run_agentic_with_policy(store: Store, now: datetime | None = None, **kwargs) -> tuple[AnalysisResponse, InputBundle]:
+    """Run the agentic cycle with the saved safety policy applied."""
+    bundle = apply_policy(default_inputs(), store.get_policy())
+    llm_client = kwargs.get("llm_client")
+    if llm_client is None:
+        from app.services.simulated_llm import SimulatedLLMClient
+        llm_client = SimulatedLLMClient()
+    response, bundle = await run_analysis_agentic(now=now, llm_client=llm_client, bundle=bundle, store=store)
+    return response, bundle

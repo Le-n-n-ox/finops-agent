@@ -1,7 +1,7 @@
 {
   "analysis_id": "ANL-SAMPLE-0001-no-change",
   "generated_at": "2026-10-13T09:00:00+03:00",
-  "mode": "demo",
+  "mode": "agent",
   "summary": {
     "workloads_evaluated": 1,
     "approved": 0,
@@ -18,6 +18,90 @@
       "decision": "no_change",
       "risk_level": "low",
       "reason": "No safe reduction identified.",
+      "confidence_score": 88,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics.",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=session-store) -> no_change",
+        "validate_policy(proposal_data={}) -> no_change"
+      ],
+      "objections": [],
+      "cycles": [
+        {
+          "role": "proposer",
+          "summary": "Pulled 72 hourly samples for session-store. Peak usage sits within 10% of the current request, so there is no meaningful headroom to give back.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_workload_metrics",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "72 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "analyze_rightsizing",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "no_change",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": null,
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "critic",
+          "summary": "Looked for a way to justify a change anyway and did not find one. The proposed reduction would fall below observed p99, which is exactly the case the critic refuses to approve.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "search_logs",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_incident_history",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "accept",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "judge",
+          "summary": "No change to rule on. The deterministic critic returned no_change, so the current allocation stays.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "validate_policy",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "no_change",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "no_change",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        }
+      ],
       "checks": [
         {
           "name": "benefit",
@@ -52,7 +136,9 @@
         ],
         "warnings": [],
         "estimated_monthly_saving_usd": 0,
-        "created_at": "2026-10-13T09:00:00+03:00"
+        "created_at": "2026-10-13T09:00:00+03:00",
+        "suppressed_saving_usd": 0,
+        "suppressed_proposal": null
       },
       "monthly_savings_estimate_usd": 0,
       "yaml_patch": null,
@@ -424,5 +510,82 @@
   "warnings": [
     "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
   ],
+  "policy_version": "demo-1",
+  "rule_version": "rules-1",
+  "input_fingerprint": "sha256:sample0001fingerprint00000000000000000000000000000000000000000000",
+  "data_health": {
+    "generated_at": "2026-10-13T09:00:00+03:00",
+    "source": "local",
+    "workloads_checked": 4,
+    "error_count": 0,
+    "warning_count": 1,
+    "workloads": [
+      {
+        "workload_id": "payment-api",
+        "namespace": "payments",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      },
+      {
+        "workload_id": "checkout-service",
+        "namespace": "commerce",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      },
+      {
+        "workload_id": "email-worker",
+        "namespace": "jobs",
+        "sample_count": 10,
+        "required_samples": 24,
+        "span_hours": 9,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": true,
+        "stale_metrics": false,
+        "status": "warning"
+      },
+      {
+        "workload_id": "session-store",
+        "namespace": "core",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      }
+    ],
+    "issues": [
+      {
+        "severity": "warning",
+        "code": "SPARSE_METRICS",
+        "source": "usage_history",
+        "workload_id": "email-worker",
+        "message": "10 samples over 9.0 hours; need 24 samples over 24.0 hours."
+      }
+    ]
+  },
   "input_issues": []
 }

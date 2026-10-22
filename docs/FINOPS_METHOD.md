@@ -32,6 +32,48 @@ Approved recommendations include canary/staging checks, metrics to watch, and ro
 
 Policy exceptions are scoped by workload, reason, and UTC expiry. Add them through `PUT /api/policies` in the `policy_exceptions` array; an expired exception stops suppressing the workload automatically. They do not bypass safety checks for other workloads.
 
+## Agent review cycle (Proposer → Critic → Judge)
+
+`POST /api/analyze` accepts a `mode`. `"pipeline"` runs the deterministic optimizer and critic alone. `"agent"` runs the same decision path inside a three-phase review cycle, which adds reasoning, objections, and a confidence score without changing any decision.
+
+| Phase | What it does | Bounded by |
+|---|---|---|
+| Proposer | Gathers evidence with tools and states a case for or against a reduction. Injects any past human rejections for the workload as "Historical Lessons". | 10 iterations |
+| Critic | Red-teams the case. May call read-only tools (`search_logs`, `get_incident_history`, `get_dependencies`) to ground its objections. | 4 iterations |
+| Judge | Weighs the objections against the deterministic verdict and rules. | 3 iterations |
+
+The deterministic Context Critic still owns every final status. The adversarial phase can only **downgrade**: an approved recommendation with an unanswered blocking objection becomes `needs_review`, never `rejected`. The pipeline and agent modes therefore always produce identical decisions — `tests/test_agent_api.py::test_agent_and_pipeline_agree_on_decisions` asserts this.
+
+Objection codes are stable, and each one is grounded in a tool the agent actually called:
+
+| Code | Severity | Raised when |
+|---|---|---|
+| `RECURRING_EVENT_UNMODELLED` | blocking | An upcoming business event targets the workload with a load multiplier, and the proposal does not account for it. |
+| `INCIDENT_OVERLAP_IGNORED` | blocking | A prior incident on the same workload covers the resource being reduced. |
+| `LOG_PRESSURE_IGNORED` | blocking | Container logs show an OOMKill, throttling, or eviction pressure. |
+| `DEPENDENCY_PRESSURE_IGNORED` | advisory | An upstream dependency has its own incident history. |
+| `VERIFICATION_GAP` | blocking | A reported number could not be traced to a tool result. |
+| `THIN_EVIDENCE` | blocking | The sample count is below the required minimum. |
+
+### Agent confidence score
+
+`WorkloadResult.confidence_score` is a 0–100 score, and `confidence_basis` is the one-line derivation shown beside it. It blends two independent signals:
+
+```text
+score = 0.60 × traceability + 0.40 × evidence − overlap penalty − objection penalty
+```
+
+- **Traceability** is the share of numbers in the report that appear in a tool result. A fabricated figure is the failure mode that matters most, so it is weighted highest. A report with no numbers scores 100 on this term — there is nothing to misstate.
+- **Evidence** combines sample sufficiency (45%), metric freshness (35%), and freedom from incident/event overlap (20%).
+- **Overlap penalty** is 30 points when a recent incident or event overlaps the decision.
+- **Objection penalty** is 12 points per blocking objection and 4 per advisory note, capped at 45. A flat penalty would make every risky workload look equally uncertain and destroy the score's ability to rank opportunities.
+
+In the demo fixtures this produces a spread from 100 for the clean workloads down to 34 for `recommendation-api`, which carries two blocking objections and an advisory note.
+
+### Reviewer feedback memory
+
+A review recorded through `POST /api/reports/{report_id}/review` may carry `rejection_reasons`, `resource`, and `reviewer_guidance`. `Store.get_feedback_for_workload` returns them, and the orchestrator injects them into the proposer's system prompt as "Historical Lessons" on the next analysis of that workload. Only `REJECTED` reviews become lessons — an acceptance is not a signal to change behaviour. The agent survives a store that is unavailable: a failed lookup yields no lessons rather than aborting the analysis.
+
 ## Planted scenario evaluation
 
 Run `python scripts/evaluate_scenarios.py` from the repository root to regenerate the table and aggregate metrics below. Boundary scenarios plant controlled usage values so each rule is tested directly.
