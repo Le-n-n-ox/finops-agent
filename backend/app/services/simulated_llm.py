@@ -1,13 +1,10 @@
 from __future__ import annotations
 import re
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List
 
+from app.integrations.llm_client import LLMResponse
 
-class LLMResponse(TypedDict):
-    content: Optional[str]
-    tool_call: Optional[Dict[str, Any]]
-    thought: Optional[str]
-    conclusion: bool
+__all__ = ["LLMResponse", "SimulatedLLMClient"]
 
 
 class SimulatedLLMClient:
@@ -18,13 +15,19 @@ class SimulatedLLMClient:
     phase-aware: the orchestrator tells it which role is speaking ('proposer' or 'critic') and
     it answers in character, so the Proposer -> Critic -> Judge cycle is exercised end to end
     without a real model behind it.
+
+    It is the fallback when no model server answers, and the fixture the tests run against. It
+    speaks exactly the same protocol as the live client, so the orchestrator cannot tell the
+    difference - which is the point: the same code path is exercised either way, and the status
+    says out loud which one answered.
     """
 
     def __init__(self):
         self.call_count = 0
         self.phase = "proposer"
 
-    async def chat(self, system: str, user: str, tools: List[Dict[str, Any]], history: List[tuple]) -> LLMResponse:
+    async def chat(self, system: str, user: str, tools: List[Dict[str, Any]],
+                   history: List[Dict[str, Any]]) -> LLMResponse:
         self.call_count += 1
 
         # The orchestrator's system prompt tells us which role is speaking.
@@ -36,12 +39,31 @@ class SimulatedLLMClient:
             self.phase = "proposer"
 
         if self.phase == "critic":
-            return self._critic_turn(user, tools)
-        if self.phase == "judge":
-            return self._judge_turn(user)
-        return self._proposer_turn(user, tools)
+            response = self._critic_turn(user, tools, history)
+        elif self.phase == "judge":
+            response = self._judge_turn(user)
+        else:
+            response = self._proposer_turn(user, tools, history)
+
+        # The live client reports the provider's own call id so the orchestrator can pair a
+        # tool result with the call that asked for it. The stand-in has no provider, so it mints
+        # a stable one.
+        response["tool_call_id"] = f"sim-{self.call_count}" if response.get("tool_call") else None
+        return response
 
     # ------------------------------------------------------------------ helpers
+    @staticmethod
+    def _tool_calls_made(history: List[Dict[str, Any]] | None, user: str) -> int:
+        """How many tool calls this phase has already made.
+
+        The orchestrator records each turn in the phase's own OpenAI message list, so the count
+        comes from the assistant messages that carry `tool_calls`. The fallback to counting "Tool "
+        in the prose context is there for callers that predate the message list.
+        """
+        if history:
+            return sum(1 for message in history if message.get("role") == "assistant" and message.get("tool_calls"))
+        return user.count("Tool ")
+
     @staticmethod
     def _workload_id(user: str) -> str:
         match = re.search(r"Analyze workload: ([^\s,.]+)", user)
@@ -55,12 +77,13 @@ class SimulatedLLMClient:
         return any(tool.get("name") == name for tool in tools)
 
     # ------------------------------------------------------------------ proposer
-    def _proposer_turn(self, user: str, tools: List[Dict[str, Any]]) -> LLMResponse:
+    def _proposer_turn(self, user: str, tools: List[Dict[str, Any]],
+                       history: List[Dict[str, Any]] | None = None) -> LLMResponse:
         workload_id = self._workload_id(user)
         lower = workload_id.lower()
 
         # How many tool calls has the proposer already made on this workload?
-        made = user.count("Tool ")
+        made = self._tool_calls_made(history, user)
 
         if "payments" in lower or "payment" in lower:
             # Path 1: The "Investigative" path (spike -> incident -> downgrade)
@@ -156,9 +179,10 @@ class SimulatedLLMClient:
         }
 
     # ------------------------------------------------------------------ critic
-    def _critic_turn(self, user: str, tools: List[Dict[str, Any]]) -> LLMResponse:
+    def _critic_turn(self, user: str, tools: List[Dict[str, Any]],
+                     history: List[Dict[str, Any]] | None = None) -> LLMResponse:
         workload_id = self._workload_id(user)
-        made = user.count("Tool ")
+        made = self._tool_calls_made(history, user)
 
         # The critic gathers its own evidence: logs, then dependencies, then it rules.
         if made == 0 and self._tool_available(tools, "search_logs"):

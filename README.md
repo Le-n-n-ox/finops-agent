@@ -8,24 +8,23 @@ A recommendation-only FinOps prototype. The optimizer proposes lower Kubernetes 
 2. Computes per-workload usage percentiles and a candidate request.
 3. Applies deterministic data-quality, freshness, P99, and minimum-reduction checks.
 4. Has the critic approve, defer, reject, or request review, with evidence for its decision.
-5. Optionally runs the same decision path inside a **Proposer → Critic → Judge** review cycle that adds red-team objections, an evidence trail, and a confidence score.
+5. Runs the same decision path inside a **Proposer → Critic → Judge** review cycle that adds red-team objections, an evidence trail, and a confidence score.
 6. Returns a report and review-only YAML patch for approved recommendations.
 7. Carries human rejections forward as "Historical Lessons" into the next analysis.
 
 The Pydantic models in `backend/app/models/schemas.py` define the shared input and output contract. Units are CPU millicores, memory MiB, and timezone-aware ISO-8601 timestamps. Kubernetes limits are included as context and are never changed.
 
-## Two analysis modes
+## One analysis path: the agent cycle
 
-`POST /api/analyze` takes a `mode`:
+`POST /api/analyze` always runs the **agent cycle** — the deterministic optimizer and Context Critic, wrapped in a Proposer → Critic → Judge review cycle. There is no mode to pick. The request body still accepts a `mode` field for compatibility with older frontends, but the backend ignores it.
 
-| Mode | What runs | What it changes |
+| Path | What runs | What it changes |
 |---|---|---|
-| `pipeline` (default) | Deterministic optimizer → deterministic Context Critic. | The decision. |
-| `agent` | The same decision path, wrapped in a Proposer → Critic → Judge review cycle. | Nothing about the decision — only the reasoning, objections, evidence trail, and confidence score. |
+| agent cycle (the only one) | Deterministic optimizer → deterministic Context Critic, inside a Proposer → Critic → Judge review cycle. | The reasoning, objections, evidence trail, and confidence score — never the decision. |
 
-The deterministic critic owns every final status. The adversarial phase can only *downgrade* an approval to `needs_review`; it can never approve, reject, or defer. A regression test asserts the two modes produce identical decisions for every workload.
+The deterministic critic owns every final status. The adversarial phase can only *downgrade* an approval to `needs_review`; it can never approve, reject, or defer, and it can never change a number. Every number in the output comes from a tool result, never from the model. Nothing is ever applied to a cluster.
 
-The dashboard has a **Pipeline / Agent cycle** toggle in the header.
+The model is disclosed, not assumed. The response carries `llm_backend`, `llm_model`, and `llm_base_url`, and the UI names the model that actually ran. `GET /api/llm/status` reports the same before any analysis has run. If the model server is unreachable, the app still runs on a deterministic stand-in and says so — in the header badge, in the provenance strip, and in the API response. It never implies a model ran when it did not.
 
 ## Deterministic calculation
 
@@ -53,7 +52,7 @@ The critic independently checks that the proposal stays at or above its configur
 
 ## Agent review cycle
 
-In `agent` mode, `backend/app/services/agent_orchestrator.py` runs each workload through three bounded phases and records them as `ReviewCycle` objects in the audit log:
+`backend/app/services/agent_orchestrator.py` runs each workload through three bounded phases and records them as `ReviewCycle` objects in the audit log:
 
 | Phase | Role | Bound |
 |---|---|---|
@@ -112,28 +111,46 @@ Incident matches are exact-workload matches. A namespace match is labelled `dire
 ## Frontend
 
 `frontend/` is a React + TypeScript + Vite application. The backend exposes the analysis; the
-frontend makes it reviewable. The panels that carry the agent's work:
+frontend makes it reviewable.
+
+It is split into five routed pages, so a reviewer opens the section they need rather than
+scrolling past everything else. The routes are real URLs — the browser back button works, and a
+link to a page (or to one workload) can be pasted to someone else.
+
+| Route | Page | What it is for |
+|---|---|---|
+| `/` | Overview | The money: what is on the table, how much of it is approved, and whether that number is moving. |
+| `/workloads` | Workloads | The findings, and the evidence behind each one. |
+| `/evidence` | Evidence | What the run was built from: the stages that ran, the health of every input, the business events. |
+| `/policy` | Policy | The critic's guardrails, editable. |
+| `/history` | History | Every decision the critic has made, across reports. |
+
+The analysis is loaded once and shared by every page. The panels that carry the agent's work:
 
 | Panel | What it shows | Endpoint |
 |---|---|---|
-| **Cycle** tab (detail panel) | The Proposer → Critic → Judge phases as they ran: each phase's summary, the tools it called, the objections it raised, and the Judge's ruling. | `POST /api/analyze` (`mode: "agent"`) |
+| **Cycle** tab (detail panel) | The Proposer → Critic → Judge phases as they ran: each phase's summary, the tools it called, the objections it raised, and the Judge's ruling. | `POST /api/analyze` |
 | **What-if simulator** | Move the CPU/memory request sliders and the deterministic critic re-decides against your numbers. Nothing is saved and no patch is produced. | `POST /api/simulate` |
 | **Review history** | What a human already decided about this workload, with the structured rejection reasons — the exact text the agent replays as "Historical Lessons" next time. | `GET /api/reports/{id}`, `GET /api/decisions` |
-| **Decision history** (History tab) | Every decision the critic has made, across reports, with a search box, a status filter, and a validity column. A decision whose metrics have moved since it was made is marked stale — and the backend refuses to accept a stale decision for implementation. | `GET /api/decisions`, `GET /api/reports/{id}` |
+| **Decision history** (History page) | Every decision the critic has made, across reports, with a search box, a status filter, and a validity column. A decision whose metrics have moved since it was made is marked stale — and the backend refuses to accept a stale decision for implementation. | `GET /api/decisions`, `GET /api/reports/{id}` |
 | **Trend across analyses** | Approved savings over successive runs, with deferred and needs-review counts on the second axis. | `GET /api/dashboard/summary` |
 | **Business events** | Campaigns and freezes split into live / upcoming / past, with the services each one puts at risk. | `GET /api/events` |
 | **Safety policy** | The critic's guardrails, editable — every field the critic reads, not a selection. Saving appends a new policy version and flags earlier reports as expired. | `GET`/`PUT /api/policies`, `GET /api/policies/defaults` |
 | **Savings potential** | Everything the optimizer found, how much survived the safety rules, and what was held back. A deferral is shown with its price, not as a gap in the output. | `POST /api/analyze` |
-| **Top opportunities** | Findings ranked by savings × confidence ÷ risk, so the short list is at the top rather than buried. | `GET /api/dashboard/summary` |
+| **Top opportunities** | Findings ranked by savings × confidence ÷ risk, so the short list is at the top rather than buried. | `POST /api/analyze` |
 
-A **provenance strip** sits above the analysis: the policy version, the rule version, the input
-fingerprint and the run id, so a recommendation can be traced to the rules and the data that
-produced it. In agent mode it also says plainly that the cycle is driven by a deterministic
-stand-in, not a live language model.
+A **provenance strip** sits above the analysis on every page: the policy version, the rule version,
+the input fingerprint and the run id, so a recommendation can be traced to the rules and the data
+that produced it. It also carries the model disclosure: it names the model that ran, and when the
+run fell back to the deterministic stand-in it says so plainly in amber — a cycle driven by a
+stand-in is never presented as a live language model.
 
-The header has a **Pipeline / Agent cycle** toggle. The workflow strip changes with it, so the
-stages shown are the ones that actually produced the numbers on screen. The export button writes
-the report you are looking at — same `analysis_id`, same decisions — not a fresh run.
+There is no reasoning-mode toggle. The app always runs the agent cycle, and the header badge names
+the model that actually ran (for example `Live API · agent cycle · local-runtime/gpt-oss-20b`) or
+states plainly that the deterministic stand-in was used. The workflow strip always shows the
+agent-cycle stages, so the stages shown are the ones that actually produced the numbers on screen.
+The export button writes the report you are looking at — same `analysis_id`, same decisions — not a
+fresh run.
 
 Printing is a first-class path: the detail panel's tabs are all mounted, so a printed report
 contains the evidence, the review cycle, the critic's checks and the patch, not only whichever tab
@@ -147,9 +164,11 @@ The `data/` directory contains synthetic fixture inputs: `deployments.yaml`, `us
 ## Integrations
 
 - **Zetaris:** `backend/app/integrations/zetaris_client.py` queries the deployments, usage, events, and incidents tables from `finops_data`, including paginated query results. Set the `ZETARIS_*` values in the root `.env` to use Zetaris; when it is not configured, the loader uses local fixture files. Local `policy.yaml` and `cost_model.json` remain the source for those configuration values. See [`docs/ZETARIS_SETUP.md`](docs/ZETARIS_SETUP.md).
-- **Meterless / Nightshift runner seam:** the orchestrator routes collector, optimizer, and critic steps through `get_runner()`. `AGENT_RUNTIME=meterless` selects the Meterless-named scaffold, but the current runner still executes each function locally. `METERLESS_BASE_URL` is logged as configuration only; this scaffold does not call the hotspot or enforce a Markovian context engine. It is an integration seam, not a claim of remote execution.
-- **NVIDIA NIM:** can provide critic explanation text when configured. Deterministic critic checks remain authoritative.
-- **Language model:** the agent mode calls an LLM client through a small interface (`SimulatedLLMClient` stands in when no model is configured). The model proposes and argues; it never decides. Whatever it writes, the deterministic critic still owns the status.
+- **Meterless / Nightshift runner seam:** the orchestrator routes collector, optimizer, and critic steps through `get_runner()`. `AGENT_RUNTIME=meterless` selects the Meterless-named scaffold, but the current runner still executes each function locally; it does not enforce a Markovian context engine. It is an integration seam, not a claim of remote execution. It is separate from the language-model integration below, even though both point at the same hotspot: `METERLESS_BASE_URL` is now the live base URL the agent cycle's model client calls.
+- **NVIDIA NIM:** an *optional, explanation-only* integration. It is a separate cloud service and it is **not** the model the agent cycle uses — the agent cycle uses the local server below. The `NVIDIA_*` settings in `.env` configure this one. Deterministic critic checks remain authoritative either way.
+- **Language model (the one the agent cycle uses):** the local **Nightshift / meterless hotspot**, an OpenAI-compatible API on the host. Configure it with `METERLESS_BASE_URL` (e.g. `http://127.0.0.1:8088/v1` on a host run, `http://<host-lan-ip>:8088/v1` in Docker), `METERLESS_MODEL` (e.g. `local-runtime/gpt-oss-20b`), and either `METERLESS_API_KEY` or `METERLESS_TOKEN_FILE`. When none is set, the app auto-discovers the token file that sits beside the hotspot. The model proposes and argues; it never decides. Whatever it writes, the deterministic critic still owns the status. When no model is reachable, a deterministic stand-in runs instead and the API response and the UI both say so.
+
+Run `python scripts/check_model.py` to see whether the model server is reachable and which credential works. It prints key sources by name and path only, never a token.
 
 More details: [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md), [`docs/CONTRACT.md`](docs/CONTRACT.md), and [`docs/FINOPS_METHOD.md`](docs/FINOPS_METHOD.md) for the sizing formula, risk findings, the agent review cycle, and measurable scenario results.
 
@@ -172,6 +191,26 @@ docker compose up --build
 
 Open `http://localhost:5173` for the frontend. It proxies `/api` requests to the backend container. The backend API remains available at `http://localhost:8000`.
 
+Both host ports are configurable, because 8000 and 5173 are commonly owned by something else on the same machine — another project's container, or a local dev server. If `docker compose up` fails with `port is already allocated`, set the host ports in `.env`:
+
+```bash
+# in .env
+FINOPS_API_PORT=8080                   # published as host:8080 -> container:8000
+FINOPS_WEB_PORT=5173                   # published as host:5173 -> container:5173
+```
+
+The ports **inside** the containers are always 8000 and 5173, so the frontend's proxy to `finops_agent:8000` does not change when the host port does.
+
+The backend container needs to reach the model server, which runs on the **host**. A container reaches the host through `host.docker.internal` (Docker Desktop's alias for the host gateway) or through the host's LAN address; the container's own `127.0.0.1` is the container, not the host, so it never reaches the hotspot. The defaults already use `host.docker.internal`, so this usually needs no configuration. To point at the host's LAN address instead:
+
+```bash
+# in .env
+METERLESS_HOST_IP=192.168.1.7          # the host's LAN address
+METERLESS_STATE_DIR=C:/Users/you/AppData/Local/ai.meterless.runtime
+```
+
+`METERLESS_STATE_DIR` is the directory holding the hotspot's `proxy-token`; it is bind-mounted read-only into the container at `/run/nightshift`, and the backend reads the token from `/run/nightshift/proxy-token`. `METERLESS_CONTAINER_BASE_URL` overrides the whole URL if you would rather set it directly. The defaults keep `docker compose up` working on a machine without the hotspot installed — the backend then falls back to the deterministic stand-in and says so.
+
 The API also exposes `GET /api/validation` for ingestion issues and per-workload sample coverage/freshness. `GET /api/report?format=json` and `GET /api/report?format=markdown` generate a fresh audit report with proposals, critic checks, savings estimates, warnings, and review-only YAML patches. The dashboard includes the same health summary in its analysis response and exports reports through the report endpoint when the live API is available.
 
 ## Run locally
@@ -187,11 +226,30 @@ source .venv/bin/activate
 pip install -r backend/requirements.txt
 ```
 
-Copy `.env.example` to `.env` and set only the integrations you intend to use. Start FastAPI from the repository root:
+Copy `.env.example` to `.env` and set only the integrations you intend to use. The backend loads that file at startup (`backend/app/config.py`); a real environment variable still wins over it, so a container's or CI's environment always takes precedence. The agent cycle's model server is the local Nightshift / meterless hotspot; the `METERLESS_*` settings point at it, and its bearer token lives in a state directory beside it (on Windows: `%LOCALAPPDATA%\ai.meterless.runtime\proxy-token`). The app discovers that file on its own, so an empty `METERLESS_API_KEY` is fine. The `NVIDIA_*` settings are for the separate, optional explanation-only NIM integration and are not what the agent cycle uses.
+
+`LLM_BACKEND` decides which reasoner answers the agent turns:
+
+- `auto` (the default) probes for the model server and uses it when one answers, falling back to the deterministic stand-in when none does. The response says which one ran, and the UI shows it.
+- `simulated` pins the deterministic stand-in. No model server is contacted even when one is running — use it for a reproducible demo, or in CI. The test suite pins it, so a suite that runs next to a model server is still offline, fast and deterministic.
+
+Start FastAPI from the repository root:
 
 ```bash
 uvicorn app.main:app --reload --port 8000 --app-dir backend
 ```
+
+Check the model server before you trust a run:
+
+```bash
+python scripts/check_model.py
+```
+
+It reports which base URLs answer `/v1/models`, which key sources were found (by name and path only — never a token), and the working combination. It exits non-zero when nothing works.
+
+A full analysis is a multi-turn tool-calling review for **every** workload, and each turn is a round trip to the model server. With a local 70B model that is minutes for a whole run, not seconds — the run is not stuck, it is reasoning. If you want a run that finishes in seconds, pin the deterministic stand-in with `LLM_BACKEND=simulated`; the response then says `"llm_backend": "simulated"` so nobody mistakes it for a model's work.
+
+If the model server goes away mid-run, the review is cut short rather than thrown away: a dropped connection or a 5xx is retried, and if the server stays down the phase ends with the evidence it had and the deterministic critic still decides the workload. The report says so — on the result (`confidence_basis`), in the cycle summary, and in `warnings`, each naming the workload and the cause. A short review is never presented as a complete one.
 
 The React frontend is in `frontend/`; see [`frontend/README.md`](frontend/README.md) for its development commands. API routes are registered under `/api`.
 
@@ -203,7 +261,7 @@ backend/tests/     Backend tests
 data/              Demo fixtures and policy/cost configuration
 docs/              Shared contract and integration guides
 frontend/          React + TypeScript + Vite application
-scripts/            Fixture generation and integration checks
+scripts/            Fixture generation and integration checks (check_model.py diagnoses the model server)
 ```
 
 ```
@@ -289,7 +347,6 @@ finops-agent
 │  ├─ INTEGRATIONS.md
 │  ├─ ZETARIS_SETUP.md
 │  └─ ZETARIS_UPLOAD.md
-├─ e -i HEAD~5
 ├─ frontend
 │  ├─ .oxlintrc.json
 │  ├─ components.json
@@ -318,14 +375,24 @@ finops-agent
 │  │  │  ├─ AppToaster.tsx
 │  │  │  ├─ DecisionBadge.tsx
 │  │  │  ├─ DecisionDonut.tsx
+│  │  │  ├─ DecisionHistory.tsx
 │  │  │  ├─ DetailPanel.tsx
+│  │  │  ├─ DetailSheet.tsx
+│  │  │  ├─ EventTimeline.tsx
 │  │  │  ├─ InputStatus.tsx
+│  │  │  ├─ PolicyPanel.tsx
+│  │  │  ├─ ProvenanceStrip.tsx
 │  │  │  ├─ ResultsTable.tsx
+│  │  │  ├─ ReviewCyclePanel.tsx
 │  │  │  ├─ ReviewForm.tsx
+│  │  │  ├─ ReviewState.tsx
 │  │  │  ├─ SavingsChart.tsx
+│  │  │  ├─ SavingsPotential.tsx
 │  │  │  ├─ ScenarioSwitcher.tsx
+│  │  │  ├─ Simulator.tsx
 │  │  │  ├─ SummaryCards.tsx
 │  │  │  ├─ ThemeToggle.tsx
+│  │  │  ├─ TrendChart.tsx
 │  │  │  ├─ ui
 │  │  │  │  ├─ badge.tsx
 │  │  │  │  ├─ button.tsx
@@ -344,6 +411,17 @@ finops-agent
 │  │  │  ├─ report.ts
 │  │  │  └─ utils.ts
 │  │  ├─ main.tsx
+│  │  ├─ pages
+│  │  │  ├─ Evidence.tsx
+│  │  │  ├─ HistoryPage.tsx
+│  │  │  ├─ Overview.tsx
+│  │  │  ├─ PolicyPage.tsx
+│  │  │  └─ Workloads.tsx
+│  │  ├─ state
+│  │  │  ├─ analysis-context.ts
+│  │  │  ├─ AnalysisProvider.tsx
+│  │  │  ├─ router-context.ts
+│  │  │  └─ RouterProvider.tsx
 │  │  └─ types.ts
 │  ├─ tsconfig.app.json
 │  ├─ tsconfig.json
@@ -353,6 +431,7 @@ finops-agent
 ├─ pytest.ini
 ├─ README.md
 └─ scripts
+   ├─ check_model.py
    ├─ check_nvidia.py
    ├─ check_zetaris.py
    ├─ check_zetaris_query.py
