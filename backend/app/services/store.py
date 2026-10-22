@@ -74,18 +74,36 @@ class Store:
             if "input_fingerprint" not in decision_columns:
                 self._db.execute("ALTER TABLE decisions ADD COLUMN input_fingerprint TEXT")
 
+    # ------------------------------------------------------------------ reads
+    #
+    # `check_same_thread=False` removes the thread check on one connection; it does not make the
+    # connection safe to use from two threads at once. FastAPI runs these synchronous handlers
+    # in a threadpool, so the History page, the report detail and the dashboard routinely query
+    # the same connection in parallel - and two threads sharing a connection raise
+    # `sqlite3.InterfaceError`, which surfaced as a 500 on `/api/decisions` and
+    # `/api/reports/{id}`. Every read goes through the lock.
+
+    def _fetchone(self, sql: str, args: tuple = ()) -> sqlite3.Row | None:
+        with self._lock:
+            return self._db.execute(sql, args).fetchone()
+
+    def _fetchall(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._db.execute(sql, args).fetchall()
+
     # ------------------------------------------------------------------ reports + decisions
     def save_decision_record(self, result: WorkloadResult, report_id: str, fp: Fingerprint, policy_version: str,
                              rule_version: str = "rules-1", input_fingerprint: str | None = None,
                              created_at: datetime | None = None) -> str:
         """Persist an immutable decision snapshot and return its ID."""
         did = f"DEC-{report_id}-{result.workload_id}"
-        self._db.execute(
-            "INSERT INTO decisions(decision_id,report_id,workload_id,namespace,decision,risk_level,reason,created_at,policy_version,config_hash,metrics_at,event_version,payload,rule_version,input_fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (did, report_id, result.workload_id, result.namespace, result.decision.value, result.risk_level.value, result.reason,
-             (created_at or _now()).isoformat(), policy_version, fp.config_hash,
-             fp.metrics_at.isoformat() if fp.metrics_at else None, fp.event_version, result.model_dump_json(),
-             rule_version, input_fingerprint))
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO decisions(decision_id,report_id,workload_id,namespace,decision,risk_level,reason,created_at,policy_version,config_hash,metrics_at,event_version,payload,rule_version,input_fingerprint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (did, report_id, result.workload_id, result.namespace, result.decision.value, result.risk_level.value, result.reason,
+                 (created_at or _now()).isoformat(), policy_version, fp.config_hash,
+                 fp.metrics_at.isoformat() if fp.metrics_at else None, fp.event_version, result.model_dump_json(),
+                 rule_version, input_fingerprint))
         return did
 
     def save_report(self, response: AnalysisResponse, fingerprints: Mapping[str, Fingerprint], policy_version: str) -> list[str]:
@@ -105,20 +123,20 @@ class Store:
                 raise
 
     def get_report(self, report_id: str) -> AnalysisResponse | None:
-        row = self._db.execute("SELECT payload FROM reports WHERE report_id=?", (report_id,)).fetchone()
+        row = self._fetchone("SELECT payload FROM reports WHERE report_id=?", (report_id,))
         return AnalysisResponse.model_validate_json(row["payload"]) if row else None
 
     def latest_report(self) -> AnalysisResponse | None:
-        row = self._db.execute("SELECT payload FROM reports ORDER BY created_at DESC, rowid DESC LIMIT 1").fetchone()
+        row = self._fetchone("SELECT payload FROM reports ORDER BY created_at DESC, rowid DESC LIMIT 1")
         return AnalysisResponse.model_validate_json(row["payload"]) if row else None
 
     def list_reports(self, limit: int = 20) -> list[AnalysisResponse]:
-        rows = self._db.execute("SELECT payload FROM reports ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,)).fetchall()
+        rows = self._fetchall("SELECT payload FROM reports ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,))
         return [AnalysisResponse.model_validate_json(r["payload"]) for r in rows]
 
     # ------------------------------------------------------------------ decisions (query)
     def _record(self, row: sqlite3.Row, with_snapshot: bool) -> DecisionRecord:
-        last = self._db.execute("SELECT action FROM reviews WHERE decision_id=? ORDER BY id DESC LIMIT 1", (row["decision_id"],)).fetchone()
+        last = self._fetchone("SELECT action FROM reviews WHERE decision_id=? ORDER BY id DESC LIMIT 1", (row["decision_id"],))
         return DecisionRecord(
             decision_id=row["decision_id"], report_id=row["report_id"], workload_id=row["workload_id"], namespace=row["namespace"],
             decision=DecisionStatus(row["decision"]), risk_level=row["risk_level"], reason=row["reason"],
@@ -129,7 +147,7 @@ class Store:
             snapshot=WorkloadResult.model_validate_json(row["payload"]) if with_snapshot else None)
 
     def get_decision(self, decision_id: str, with_snapshot: bool = True) -> DecisionRecord | None:
-        row = self._db.execute("SELECT * FROM decisions WHERE decision_id=?", (decision_id,)).fetchone()
+        row = self._fetchone("SELECT * FROM decisions WHERE decision_id=?", (decision_id,))
         return self._record(row, with_snapshot) if row else None
 
     def decisions(self, *, workload_id: str | None = None, status: DecisionStatus | None = None,
@@ -152,7 +170,7 @@ class Store:
             sql.append("AND (SELECT action FROM reviews r WHERE r.decision_id=d.decision_id ORDER BY r.id DESC LIMIT 1)=?")
             args.append(reviewer_action.value)
         sql.append("ORDER BY d.created_at DESC, d.rowid DESC LIMIT ?"); args.append(max(1, min(limit, 500)))
-        return [self._record(r, False) for r in self._db.execute(" ".join(sql), args).fetchall()]
+        return [self._record(r, False) for r in self._fetchall(" ".join(sql), tuple(args))]
 
     # ------------------------------------------------------------------ audit trail
     def record_reviewer_action(self, decision_id: str, action: ReviewAction, comment: str | None = None,
@@ -208,10 +226,10 @@ class Store:
         Used to inject 'Historical Lessons' into the agent's proposer prompt so a rejected reduction is not
         proposed again without addressing the reviewer's objection.
         """
-        rows = self._db.execute(
+        rows = self._fetchall(
             "SELECT * FROM reviews WHERE workload_id=? ORDER BY id DESC LIMIT ?",
             (workload_id, max(1, min(limit, 100))),
-        ).fetchall()
+        )
         records: list[AuditRecord] = []
         for row in rows:
             data = dict(row)
@@ -227,7 +245,7 @@ class Store:
             sql += " AND decision_id=?"; args.append(decision_id)
         if report_id:
             sql += " AND report_id=?"; args.append(report_id)
-        rows = self._db.execute(sql + " ORDER BY id ASC LIMIT ?", [*args, limit]).fetchall()
+        rows = self._fetchall(sql + " ORDER BY id ASC LIMIT ?", tuple([*args, limit]))
         records: list[AuditRecord] = []
         for r in rows:
             data = dict(r)
@@ -248,5 +266,5 @@ class Store:
         return saved
 
     def get_policy(self) -> CriticPolicy | None:
-        row = self._db.execute("SELECT payload FROM policies ORDER BY id DESC LIMIT 1").fetchone()
+        row = self._fetchone("SELECT payload FROM policies ORDER BY id DESC LIMIT 1")
         return CriticPolicy.model_validate_json(row["payload"]) if row else None
