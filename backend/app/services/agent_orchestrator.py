@@ -26,6 +26,7 @@ from app.models.schemas import (
 )
 from app.services.agent_tools import AgentToolbox
 from app.services.verification_service import VerificationService
+from app.services.redaction import scrub
 from app.services import adversarial_service
 from app.integrations.llm_client import LLMUnavailable
 
@@ -128,6 +129,9 @@ class AgentOrchestrator:
     def __init__(self, bundle: InputBundle, llm_client: Any, store: Any = None):
         self.bundle = bundle
         self.llm = llm_client  # Assume an LLM client that supports tool use
+        # The toolbox is replaced for every workload, in `analyze_workload_agentic`. It is
+        # created here unbound only so the attribute always exists; nothing reads it before
+        # the first workload's review starts.
         self.toolbox = AgentToolbox(bundle)
         self.verifier = VerificationService()
         self.store = store
@@ -325,9 +329,14 @@ class AgentOrchestrator:
                 # The model server went away mid-phase. End the phase here rather than let the
                 # outage unwind the whole workload: the evidence gathered so far is still good
                 # evidence, and the deterministic critic still owns the decision.
-                self.model_outage = self.model_outage or f"{type(exc).__name__}: {exc}"
+                #
+                # The cause is scrubbed. This summary is published in the API response, and a
+                # transport error can carry a header the server echoed back - a token in the
+                # response is a token in the log of whoever reads it.
+                cause = scrub(f"{type(exc).__name__}: {exc}")
+                self.model_outage = self.model_outage or cause
                 cycle.summary = (f"The proposer stopped after {len(cycle.steps)} tool call(s) because the "
-                                 f"model server became unavailable ({type(exc).__name__}: {exc}).")
+                                 f"model server became unavailable ({cause}).")
                 break
             before = len(cycle.steps)
 
@@ -394,9 +403,10 @@ class AgentOrchestrator:
             except LLMUnavailable as exc:
                 # Same as the proposer: the critic's objections are derived from the tool
                 # evidence, not from the model's prose, so the review still has teeth without it.
-                self.model_outage = self.model_outage or f"{type(exc).__name__}: {exc}"
+                cause = scrub(f"{type(exc).__name__}: {exc}")
+                self.model_outage = self.model_outage or cause
                 cycle.summary = (f"The critic stopped after {len(cycle.steps)} tool call(s) because the "
-                                 f"model server became unavailable ({type(exc).__name__}: {exc}).")
+                                 f"model server became unavailable ({cause}).")
                 break
             before = len(cycle.steps)
             current_context, step = self._handle_response(response, cycle, audit_log, current_context)
@@ -463,11 +473,12 @@ class AgentOrchestrator:
             # The ruling stands either way, but a review that lost its narration is a shorter
             # review, and the report has to say so rather than let it pass unnoticed.
             if isinstance(exc, LLMUnavailable):
-                self.model_outage = self.model_outage or f"{type(exc).__name__}: {exc}"
+                cause = scrub(f"{type(exc).__name__}: {exc}")
+                self.model_outage = self.model_outage or cause
                 cycle.summary = (f"{cycle.summary} The judge could not narrate the ruling because the "
-                                 f"model server became unavailable ({type(exc).__name__}: {exc}).")
+                                 f"model server became unavailable ({cause}).")
             else:
-                logger.warning("The judge's narration failed for %s: %s", workload_id, exc)
+                logger.warning("The judge's narration failed for %s: %s", workload_id, scrub(str(exc)))
 
         cycle.completed_at = datetime.now(timezone.utc)
         return cycle
@@ -478,6 +489,14 @@ class AgentOrchestrator:
         audit_log = AgentAuditLog(session_id=session_id, workload_id=workload_id)
         # One workload's outage says nothing about the next one's.
         self.model_outage = None
+        # A toolbox per workload, bound to this workload.
+        #
+        # The toolbox remembers the last result of each tool, and `validate_policy` judges the
+        # most recent `analyze_rightsizing` result. A shared toolbox would let one workload's
+        # review validate another workload's proposal, and publish that verdict under this
+        # workload's name - the model choosing which proposal the safety check judges, which
+        # is the one thing the model must never do. A bound toolbox refuses the call instead.
+        self.toolbox = AgentToolbox(self.bundle, workload_id=workload_id)
 
         lessons = self._historical_lessons(workload_id)
         audit_log.historical_lessons = lessons
@@ -520,13 +539,22 @@ class AgentOrchestrator:
         return final_result, audit_log
 
     # ------------------------------------------------------------------ helpers
+    def _now(self) -> datetime:
+        """The analysis clock.
+
+        The demo fixes it in policy.yaml so results are repeatable, and without it every metric
+        looks stale relative to the wall clock. Every verdict this module produces is computed
+        against this clock, so they cannot disagree with each other.
+        """
+        return self.bundle.policy.simulation_now or datetime.now(timezone.utc)
+
     def _score_confidence(self, verification: VerificationResult, formal: WorkloadResult,
                           objections: List[CriticObjection] | None = None) -> tuple[float, str]:
         """Blend number traceability with the evidence quality the proposal was built on."""
         proposal = formal.proposal
         metrics = proposal.metrics
         age_hours = None
-        now = self.bundle.policy.simulation_now or datetime.now(timezone.utc)
+        now = self._now()
         if metrics.last_observed_at is not None:
             observed = metrics.last_observed_at
             if observed.tzinfo is None:
@@ -614,20 +642,25 @@ class AgentOrchestrator:
         for step in reversed(audit_log.steps):
             # A tool that failed holds `{"error": ...}`, not a verdict. Accepting one here used
             # to hand a dict to the rest of the cycle, which then died looking for `.proposal`
-            # and cost the workload its whole review.
-            if step.tool == "validate_policy" and isinstance(step.result, WorkloadResult):
+            # and cost the workload its whole review. The workload id is checked too: a verdict
+            # about a different workload is not this workload's verdict.
+            if (step.tool == "validate_policy"
+                    and isinstance(step.result, WorkloadResult)
+                    and step.result.workload_id == audit_log.workload_id):
                 return step.result
 
         for step in reversed(audit_log.steps):
-            if step.tool == "analyze_rightsizing" and isinstance(step.result, OptimizationProposal):
+            if (step.tool == "analyze_rightsizing"
+                    and isinstance(step.result, OptimizationProposal)
+                    and step.result.workload_id == audit_log.workload_id):
                 from app.services.critic_service import evaluate
 
-                return evaluate(step.result, self.bundle)
+                return evaluate(step.result, self.bundle, self._now())
 
         if self.model_outage:
             # The agent never got a turn. The deterministic critic still decides, and the
             # reviewer's report has to say that no model reviewed this workload.
-            return deterministic_result(self.bundle, audit_log.workload_id)
+            return deterministic_result(self.bundle, audit_log.workload_id, self._now())
 
         return WorkloadResult(
             workload_id=audit_log.workload_id,
@@ -638,7 +671,7 @@ class AgentOrchestrator:
             checks=[],
             proposal=OptimizationProposal(
                 proposal_id="err", workload_id=audit_log.workload_id,
-                status="needs_review", current=ResourceSettings(), metrics=UsageMetrics(), created_at=datetime.now(timezone.utc)
+                status="needs_review", current=ResourceSettings(), metrics=UsageMetrics(), created_at=self._now()
             )
         )
 

@@ -122,6 +122,53 @@ class _FakeResponse:
     def json(self):
         return self._payload
 
+    @property
+    def text(self):
+        return str(self._payload)
+
+
+class TestAMalformedAnswerIsAnOutage:
+    """A 200 is not a guarantee of a well-formed body.
+
+    A server that answers with a list, or with a choice that is not an object, used to raise
+    a raw AttributeError. That is not an `LLMUnavailable`, so it slipped past the outage
+    handling and left the workload looking like it was never reviewed - the opposite of what
+    the outage path exists to say.
+    """
+
+    def _client(self) -> "llm_client.OpenAICompatClient":
+        return llm_client.OpenAICompatClient(
+            llm_client.LLMConfig(base_url="http://127.0.0.1:8088/v1", api_key="k",
+                                 model="m", key_source="env METERLESS_API_KEY"),
+            timeout=1.0,
+        )
+
+    def _patch_post(self, monkeypatch, payload):
+        async def fake_post(_client, url, **kwargs):
+            return _FakeResponse(200, payload)
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    @pytest.mark.parametrize("payload", [
+        ["not", "an", "object"],
+        {"choices": []},
+        {"choices": ["not an object"]},
+        {"choices": [{"message": "not an object"}]},
+        {"choices": [{"no_message_key": True}]},
+    ])
+    def test_a_malformed_body_is_reported_as_an_outage(self, monkeypatch, payload):
+        self._patch_post(monkeypatch, payload)
+        client = self._client()
+        with pytest.raises(llm_client.LLMUnavailable):
+            asyncio.run(client.chat("system", "user", [], []))
+
+    def test_a_well_formed_body_still_works(self, monkeypatch):
+        self._patch_post(monkeypatch, {"choices": [{"message": {"content": "hello"}}]})
+        client = self._client()
+        answer = asyncio.run(client.chat("system", "user", [], []))
+        assert answer["content"] == "hello"
+        assert answer["conclusion"] is True
+
 
 class TestTransientFailuresAreRetried:
     """A model server that hiccups is not the same as one that refuses.

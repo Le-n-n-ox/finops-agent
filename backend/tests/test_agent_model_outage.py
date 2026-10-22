@@ -231,6 +231,49 @@ class TestTheResponseSaysWhatHappened:
 
         assert "super-secret-token" not in " ".join(response.warnings)
 
+    def test_nothing_in_the_response_leaks_a_credential(self, bundle):
+        """The warning is not the only place a cause is published.
+
+        The cause of an outage also lands in the cycle summaries, and the cycles are part of the
+        response. A transport error can carry a header the server echoed back - a token that
+        reaches the response has reached every screen that shows it, and every log that keeps
+        it.
+        """
+        client = FlakyClient(
+            [{"content": "Conclusion.", "conclusion": True}],
+            fail_from=1,
+            message="The model server at http://127.0.0.1:8088/v1 could not be reached: "
+                    "Authorization: Bearer super-secret-token",
+        )
+        response, _ = asyncio.run(
+            run_analysis_agentic(bundle=bundle, llm_client=client,
+                                 llm_status={"backend": "openai-compatible", "model": "m",
+                                             "base_url": "http://127.0.0.1:8088/v1",
+                                             "key_source": "env METERLESS_API_KEY", "detail": None})
+        )
+
+        published = response.model_dump_json()
+        assert "super-secret-token" not in published, "a credential reached the response"
+
+    def test_the_cause_is_still_published_after_scrubbing(self, bundle):
+        """Scrubbing the credential must not scrub the explanation with it."""
+        client = FlakyClient(
+            [{"content": "Conclusion.", "conclusion": True}],
+            fail_from=1,
+            message="The model server at http://127.0.0.1:8088/v1 could not be reached: "
+                    "Authorization: Bearer super-secret-token",
+        )
+        response, _ = asyncio.run(
+            run_analysis_agentic(bundle=bundle, llm_client=client,
+                                 llm_status={"backend": "openai-compatible", "model": "m",
+                                             "base_url": "http://127.0.0.1:8088/v1",
+                                             "key_source": "env METERLESS_API_KEY", "detail": None})
+        )
+
+        warnings = " ".join(response.warnings)
+        assert "cut short" in warnings.lower(), "the cause stopped being published"
+        assert "REDACTED" in warnings
+
     def test_a_warning_that_would_name_every_workload_stays_readable(self, bundle):
         """A server that stays down affects all twelve workloads.
 
