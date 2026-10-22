@@ -30,30 +30,32 @@ editing happens.
 
 ## Pages
 
-The dashboard is split into five routed pages, so a reviewer opens the section they need instead of
-scrolling past everything else. The routes are real URLs — the browser back button works, and a
-link to a page (or a specific workload) can be pasted to someone else.
+The app opens on a **landing page** that explains the system and asks nothing of the backend — no
+analysis runs until the reader steps into the workspace. That is the difference between a page
+that loads in a second and one that appears to hang.
 
-| Route        | Page      | What it is for                                                                |
-| ------------ | --------- | ----------------------------------------------------------------------------- |
-| `/`          | Overview  | The money: what is on the table, how much is approved, and whether it is moving. |
-| `/workloads` | Workloads | The findings and the evidence behind each one.                                 |
-| `/evidence`  | Evidence  | What the run was built from: stages, input health, and the business events.    |
-| `/policy`    | Policy    | The safety rules the critic enforces, editable.                                |
-| `/history`   | History   | Every decision the critic has made, across reports.                            |
+From there it is a workspace with a sidebar, and the route is the URL: a workload has its own
+page, so a link to one can be pasted to someone else and it opens on that workload.
 
-The selected workload lives in the query string (`/workloads?workload=<id>`), so "look at this
-one" is a link, not a transient state. Opening a workload *pushes* a history entry, so the back
-button returns to the list rather than leaving the page — and the selection and the URL are kept
-in step by one effect, so they can never disagree about which workload is on screen.
+| Route               | Section  | What it is for                                                                |
+| ------------------- | -------- | ----------------------------------------------------------------------------- |
+| *(no hash)*         | Landing  | What the tool does, and why it is safe to trust. Nothing runs.                 |
+| `#/`                | Overview | The money: what is on the table, how much is approved, and whether it is moving. |
+| `#/` → Analysis     | Analysis | The findings and the evidence behind each one.                                 |
+| `#/` → Policy       | Policy   | The safety rules the critic enforces, editable.                                |
+| `#/` → History      | History  | Every decision the critic has made, across reports.                            |
+| `#/workload/<id>`   | Workload | One workload: its proposal, the evidence, the review cycle and the patch.       |
 
-Routing is a hand-rolled `history.pushState` wrapper (`src/state/`) rather than a routing library:
+The route is a hash rather than a path, because the app is served as static files: a deep link
+to `/workload/x` would 404 on reload, while `#/workload/x` resolves however it is hosted.
+
+Routing is a hand-rolled hash route (`src/hooks/useHashRoute.ts`) rather than a routing library:
 the app is a handful of top-level sections with no nested layouts, so a library would be more
 machinery than the job needs. The back button is the reason to route at all — without it, a
 reviewer who opens a workload and goes back loses their place entirely.
 
-The analysis itself is loaded **once**, in `src/state/AnalysisProvider.tsx`, and shared by every
-page. Otherwise each page would re-run the analysis on navigation.
+The analysis is loaded once, in `src/App.tsx`, and shared by every section. Otherwise each
+section would re-run the analysis on navigation.
 
 The run is **streamed**. A full analysis is a multi-turn conversation with the model server for
 every workload, so it takes minutes rather than seconds — and the page shows each workload as it
@@ -98,19 +100,15 @@ src/
 │                          is distinguishable from "there was nothing to show".
 ├─ types.ts                TypeScript mirror of backend/app/models/schemas.py. Do not diverge.
 ├─ lib/report.ts           Client-side Markdown report builder (the offline export path).
-├─ App.tsx                 The shell: header, section nav, provenance strip, route switch.
-├─ state/
-│  ├─ router-context.ts    The router contract: path, search, navigate.
-│  ├─ RouterProvider.tsx   pushState / replaceState / popstate.
-│  ├─ analysis-context.ts  The shared analysis contract.
-│  └─ AnalysisProvider.tsx Loads the analysis once; every page reads from it.
-├─ pages/
-│  ├─ Overview.tsx         Summary cards, savings potential, top opportunities, trend.
-│  ├─ Workloads.tsx        Decision mix, savings chart, results table, detail panel/sheet.
-│  ├─ Evidence.tsx         Workflow strip, input health, event timeline.
-│  ├─ PolicyPage.tsx       The editable safety policy.
-│  └─ HistoryPage.tsx      Every decision across reports.
+├─ App.tsx                 The shell: landing page, workspace, sidebar, route switch.
+├─ hooks/
+│  └─ useHashRoute.ts      The route: landing, home, or one workload's page.
 ├─ components/
+│  ├─ Navbar.tsx           The top bar and the run controls it shares with the mobile drawer.
+│  ├─ Sidebar.tsx          The workspace rail: overview, analysis, policy, history.
+│  ├─ WorkloadPage.tsx     One workload's page: proposal, evidence, cycle, patch.
+│  ├─ WorkloadDetail.tsx   The panels of that page.
+│  ├─ landing/             The landing page: what the tool does, and why it is safe.
 │  ├─ DetailPanel.tsx      The per-workload panel: Evidence / Cycle / What-if / Critic / Patch.
 │  ├─ DetailSheet.tsx      The same panel as a mobile bottom sheet (focus trap and scroll lock).
 │  ├─ ReviewCyclePanel.tsx Proposer → Critic → Judge phases, with the tools each one called.
@@ -121,6 +119,7 @@ src/
 │  ├─ PolicyPanel.tsx      The editable safety policy; saving appends a new version.
 │  ├─ ProvenanceStrip.tsx  Policy version, rule version, input fingerprint, and the LLM disclosure.
 │  ├─ SavingsPotential.tsx What the optimizer found vs what the safety rules let through.
+│  ├─ TopOpportunities.tsx The ranked short list of findings.
 │  ├─ InputStatus.tsx      The data sources behind the analysis, from the validation report.
 │  ├─ ResultsTable.tsx     The sortable, searchable workload table.
 │  ├─ TrendChart.tsx       Savings and decision mix across analyses.

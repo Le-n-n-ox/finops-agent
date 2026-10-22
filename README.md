@@ -125,19 +125,25 @@ Incident matches are exact-workload matches. A namespace match is labelled `dire
 `frontend/` is a React + TypeScript + Vite application. The backend exposes the analysis; the
 frontend makes it reviewable.
 
-It is split into five routed pages, so a reviewer opens the section they need rather than
-scrolling past everything else. The routes are real URLs — the browser back button works, and a
-link to a page (or to one workload) can be pasted to someone else.
+It opens on a **landing page** that explains the system and asks nothing of the backend — no
+analysis runs until the reader steps into the workspace, which is the difference between a page
+that loads in a second and one that appears to hang. From there the work is a workspace with a
+sidebar, and the route is the URL: a workload has its own page, so a link to one can be pasted to
+someone else and it opens on that workload.
 
-| Route | Page | What it is for |
+| Route | Section | What it is for |
 |---|---|---|
-| `/` | Overview | The money: what is on the table, how much of it is approved, and whether that number is moving. |
-| `/workloads` | Workloads | The findings, and the evidence behind each one. |
-| `/evidence` | Evidence | What the run was built from: the stages that ran, the health of every input, the business events. |
-| `/policy` | Policy | The critic's guardrails, editable. |
-| `/history` | History | Every decision the critic has made, across reports. |
+| *(no hash)* | Landing | What the tool does, and why it is safe to trust. Nothing runs. |
+| `#/` | Overview | The money: what is on the table, how much of it is approved, and whether that number is moving. |
+| `#/` → Analysis | Analysis | The findings, and the evidence behind each one. |
+| `#/` → Policy | Policy | The critic's guardrails, editable. |
+| `#/` → History | History | Every decision the critic has made, across reports. |
+| `#/workload/<id>` | Workload | One workload: its proposal, the evidence, the review cycle and the patch. |
 
-The analysis is loaded once and shared by every page. The panels that carry the agent's work:
+The route is a hash rather than a path, because the app is served as static files: a deep link
+to `/workload/x` would 404 on reload, while `#/workload/x` resolves however it is hosted.
+
+The panels that carry the agent's work:
 
 | Panel | What it shows | Endpoint |
 |---|---|---|

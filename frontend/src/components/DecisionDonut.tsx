@@ -4,9 +4,15 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { DECISIONS } from './DecisionBadge'
 import type { AnalysisSummary, DecisionStatus } from '@/types'
 
-const ORDER: DecisionStatus[] = ['approved', 'deferred', 'rejected', 'needs_review', 'no_change']
-/** One source of truth for the decision colours, shared with the trend legend. */
-const FILL = Object.fromEntries(ORDER.map((k) => [k, DECISIONS[k].hex])) as Record<DecisionStatus, string>
+/**
+ * The order the segments are drawn in. It is not cosmetic: red and amber next to each other
+ * are hard to tell apart under deuteranopia, so the violet sits between them. The steps
+ * themselves clear the colour-separation and contrast checks on both surfaces.
+ */
+const ORDER: DecisionStatus[] = ['approved', 'deferred', 'needs_review', 'rejected', 'no_change']
+/** One source of truth for the decision colours, shared with the trend legend. The values are
+ *  CSS custom properties so light and dark mode each use their own validated step. */
+const FILL = Object.fromEntries(ORDER.map((k) => [k, DECISIONS[k].css])) as Record<DecisionStatus, string>
 
 interface Props { summary: AnalysisSummary; onFilter: (f: DecisionStatus | 'all') => void; active: DecisionStatus | 'all' }
 
