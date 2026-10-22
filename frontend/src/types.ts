@@ -166,8 +166,8 @@ export interface WorkloadResult {
   reason: string
   /**
    * Evidence-based confidence from the agent's verification pass (0-100).
-   * Null in pipeline mode, where no agent runs. The proposal's own factor-based score is
-   * `proposal.confidence.score` and is present in both modes.
+   * The proposal's own factor-based score is `proposal.confidence.score` and is present
+   * regardless.
    */
   confidence_score?: number | null
   /** One-line explanation of how confidence_score was derived. */
@@ -176,7 +176,7 @@ export interface WorkloadResult {
   evidence_trail?: string[]
   /** Adversarial objections raised during the Proposer -> Critic -> Judge cycle. */
   objections?: CriticObjection[]
-  /** The three review phases, in order (agent mode only). */
+  /** The three review phases, in order. */
   cycles?: ReviewCycle[]
   /** Human rejections from prior reviews, injected into the proposer's prompt. */
   historical_lessons?: string[]
@@ -222,6 +222,33 @@ export interface AnalysisResponse {
   input_fingerprint?: string | null
   top_n_findings?: number
   top_opportunities?: TopOpportunity[]
+  /**
+   * Which reasoning path produced this analysis.
+   * "openai-compatible" = a live language model server answered the agent's turns.
+   * "simulated" = the deterministic stand-in did, and no model was called.
+   *
+   * Optional, because the contract says a payload without the field means "no model confirmed" -
+   * not "the stand-in ran". A report stored before the field existed, and the bundled mock
+   * fixtures, both have no field at all, and neither of them is a stand-in run. Making it
+   * required would have forced those payloads to claim something they cannot support.
+   */
+  llm_backend?: string
+  /** The model id that ran, or null when no live model ran. */
+  llm_model?: string | null
+  /** The model server's base URL, or null when no live model ran. */
+  llm_base_url?: string | null
+}
+
+/** GET /api/llm/status - which model server the backend resolved, before any analysis runs. */
+export interface LLMStatus {
+  /** "openai-compatible" | "simulated" */
+  backend: string
+  model: string | null
+  base_url: string | null
+  /** Human-readable name of where the credential came from. */
+  key_source: string | null
+  /** Why the simulated stand-in was used, when it was. */
+  detail: string | null
 }
 
 export interface TopOpportunity { workload_id: string; monthly_savings_usd: number; priority_score: number; confidence_score: number; risk_level: RiskLevel }
