@@ -67,6 +67,12 @@ Two tools support the cycle beyond the usual workload metrics:
 - **`search_logs`** returns simulated container logs for a workload, including `OOMKilled`, CPU throttling, and eviction entries. A log that reports memory pressure raises a blocking objection against reducing the memory request.
 - **`get_dependencies`** maps the upstream services a workload depends on, so an incident on an upstream dependency is visible rather than a surprise.
 
+Both are retrieved for every review, by the orchestrator, before the Critic's first turn. The
+objections they ground are blocking ones, and the deterministic critic has no log rule of its
+own to fall back on — so if the evidence depended on the model choosing to ask for it, a model
+that did not ask would have the objection suppressed and the workload approved on the strength
+of an omission. The evidence is in the audit trail, so a reviewer sees it too.
+
 The model chooses which tool to call, so the tools are bound to the workload under review: every
 workload-scoped tool refuses another workload's id and says which one to use. The model
 therefore cannot choose *which* proposal the safety check judges, and a verdict about another
