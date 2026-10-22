@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS reviews(
 CREATE TABLE IF NOT EXISTS policies(id INTEGER PRIMARY KEY AUTOINCREMENT, version TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_dec_workload ON decisions(workload_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_rev_decision ON reviews(decision_id);
+CREATE INDEX IF NOT EXISTS idx_report_created ON reports(created_at);
+CREATE INDEX IF NOT EXISTS idx_dec_created ON decisions(created_at);
 """
 _APPEND_ONLY = "".join(
     f"CREATE TRIGGER IF NOT EXISTS {t}_no_{op.lower()} BEFORE {op} ON {t} BEGIN SELECT RAISE(ABORT, '{t} is append-only'); END;\n"
@@ -55,24 +57,52 @@ def _parse_reasons(raw: str | None) -> list[str]:
 class Store:
     def __init__(self, path: str | Path = "finops_history.sqlite3") -> None:
         self._lock = threading.RLock()
-        self._db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
-        self._db.row_factory = sqlite3.Row
+        self._path = str(path)
+        self._local = threading.local()
         with self._lock:
-            self._db.executescript(_SCHEMA + _APPEND_ONLY)
-            review_columns = {row[1] for row in self._db.execute("PRAGMA table_info(reviews)")}
+            db = self._conn()
+            db.executescript(_SCHEMA + _APPEND_ONLY)
+            review_columns = {row[1] for row in db.execute("PRAGMA table_info(reviews)")}
             if "outcome" not in review_columns:
-                self._db.execute("ALTER TABLE reviews ADD COLUMN outcome TEXT")
+                db.execute("ALTER TABLE reviews ADD COLUMN outcome TEXT")
             if "rejection_reasons" not in review_columns:
-                self._db.execute("ALTER TABLE reviews ADD COLUMN rejection_reasons TEXT")
+                db.execute("ALTER TABLE reviews ADD COLUMN rejection_reasons TEXT")
             if "resource" not in review_columns:
-                self._db.execute("ALTER TABLE reviews ADD COLUMN resource TEXT")
+                db.execute("ALTER TABLE reviews ADD COLUMN resource TEXT")
             if "reviewer_guidance" not in review_columns:
-                self._db.execute("ALTER TABLE reviews ADD COLUMN reviewer_guidance TEXT")
-            decision_columns = {row[1] for row in self._db.execute("PRAGMA table_info(decisions)")}
+                db.execute("ALTER TABLE reviews ADD COLUMN reviewer_guidance TEXT")
+            decision_columns = {row[1] for row in db.execute("PRAGMA table_info(decisions)")}
             if "rule_version" not in decision_columns:
-                self._db.execute("ALTER TABLE decisions ADD COLUMN rule_version TEXT NOT NULL DEFAULT 'rules-1'")
+                db.execute("ALTER TABLE decisions ADD COLUMN rule_version TEXT NOT NULL DEFAULT 'rules-1'")
             if "input_fingerprint" not in decision_columns:
-                self._db.execute("ALTER TABLE decisions ADD COLUMN input_fingerprint TEXT")
+                db.execute("ALTER TABLE decisions ADD COLUMN input_fingerprint TEXT")
+
+    def _conn(self) -> sqlite3.Connection:
+        """One connection per thread.
+
+        A single connection shared by the event-loop thread and the worker threads cannot be used
+        concurrently. sqlite3 serialises statements per connection, so a read that interleaves with
+        a write returns another statement's half-read row: payloads come back empty or truncated and
+        the API answers 500 on data that is perfectly fine in the file. Each thread therefore gets
+        its own connection, and WAL lets those connections read while one of them writes.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self._path, isolation_level=None, timeout=30.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=30000")
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+            except sqlite3.DatabaseError:  # pragma: no cover - filesystem without shared-memory support
+                pass
+            self._local.conn = conn
+        return conn
+
+    @property
+    def _db(self) -> sqlite3.Connection:
+        """The calling thread's connection."""
+        return self._conn()
 
     # ------------------------------------------------------------------ reads
     #

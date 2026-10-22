@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   AnalysisResponse,
   AuditRecord,
   CriticPolicy,
@@ -49,21 +49,52 @@ export interface Fetched<T> {
 }
 
 /**
+ * How long a request may take before the UI stops waiting for it.
+ *
+ * The analysis can be slow: the agent cycle runs a proposer, a critic and a judge, and each of
+ * them can call a model. Two minutes is generous for that. But a backend that never answers must
+ * not leave the page waiting forever ΓÇö that reads as a blank page with no explanation.
+ */
+const ANALYSIS_TIMEOUT_MS = 120_000
+
+/** The panels that hang off the analysis are quick; a tenth of that is already a broken backend. */
+const READ_TIMEOUT_MS = 20_000
+
+const isTimeout = (e: unknown) =>
+  e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')
+
+/**
  * Try POST /api/analyze; fall back to bundled fixtures so the UI works before the backend does.
  * `scenario` is sent to the API (ignored until backend supports it) and selects the mock fixture.
  *
- * There is one reasoning path now - the agent cycle - so no mode is sent. The backend ignores the
- * field anyway for older frontends.
+ * `signal` cancels the request when the caller no longer wants the result. A cancelled run must
+ * not fall back to the fixtures: the analysis may still be running on the backend, and showing
+ * fixtures for it would present mock data as a completed analysis.
  */
-export async function runAnalysis(scenario = 'all'): Promise<LoadResult> {
+export async function runAnalysis(scenario = 'all', mode = 'pipeline', signal?: AbortSignal): Promise<LoadResult> {
+  const timeout = AbortSignal.timeout(ANALYSIS_TIMEOUT_MS)
   let res: Response
   try {
     res = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scenario }),
+      body: JSON.stringify({ scenario, mode }),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     })
-  } catch {
+  } catch (e) {
+    if (signal?.aborted) {
+      throw new BackendError('The analysis was superseded by a newer run.', 409)
+    }
+    // A backend that is unreachable and a backend that never answers are different failures. The
+    // first can fall back to the fixtures, because nothing is running. The second might still be
+    // working on the run, and showing fixtures for it would misrepresent a live analysis as a
+    // completed one - so it is reported instead.
+    if (isTimeout(e)) {
+      throw new BackendError(
+        `The backend did not answer within ${ANALYSIS_TIMEOUT_MS / 1000} seconds. It may be busy or stuck - check that it is running, then try again.`,
+        408,
+      )
+    }
     // The backend is not reachable at all. Falling back to fixtures is honest here.
     return loadMock(scenario)
   }
@@ -77,21 +108,30 @@ export async function runAnalysis(scenario = 'all'): Promise<LoadResult> {
   return { data: (await res.json()) as AnalysisResponse, source: 'api' }
 }
 
+async function loadMock(scenario: string): Promise<LoadResult> {
+  const safe = /^[a-z-]+$/.test(scenario) ? scenario : 'all'
+  const res = await fetch(safe === 'all' ? '/mock/analysis.json' : `/mock/scenarios/${safe}.json`)
+  if (!res.ok) throw new Error('Mock data not found. Run: npm run mock')
+  return { data: (await res.json()) as AnalysisResponse, source: 'mock' }
+}
+
 /**
  * Run the analysis and report each workload as it is finished.
  *
- * A full run is a multi-turn conversation with the model server for every workload, so it
+ * A full analysis is a multi-turn conversation with the model server for every workload, so it
  * takes minutes rather than seconds. Without this the page shows nothing at all for the whole
  * run, and a slow run is indistinguishable from a stuck one - the reader has no way to tell
  * that anything is happening.
  *
  * The stream is the same analysis `/api/analyze` runs; the only difference is when the results
- * arrive.
+ * arrive. There is no overall timeout here: a run that takes twenty minutes is a normal run, and
+ * the caller cancels it by aborting the signal.
  */
 export async function streamAnalysis(
   scenario: string,
   onWorkload: (result: WorkloadResult) => void,
   onStart?: (total: number) => void,
+  signal?: AbortSignal,
 ): Promise<LoadResult> {
   let res: Response
   try {
@@ -99,8 +139,12 @@ export async function streamAnalysis(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scenario }),
+      signal,
     })
   } catch {
+    if (signal?.aborted) {
+      throw new BackendError('The analysis was superseded by a newer run.', 409)
+    }
     // The backend is not reachable at all. Falling back to fixtures is honest here.
     return loadMock(scenario)
   }
@@ -157,13 +201,6 @@ export async function streamAnalysis(
   return { data: done, source: 'api' }
 }
 
-async function loadMock(scenario: string): Promise<LoadResult> {
-  const safe = /^[a-z-]+$/.test(scenario) ? scenario : 'all'
-  const res = await fetch(safe === 'all' ? '/mock/analysis.json' : `/mock/scenarios/${safe}.json`)
-  if (!res.ok) throw new Error('Mock data not found. Run: npm run mock')
-  return { data: (await res.json()) as AnalysisResponse, source: 'mock' }
-}
-
 export async function loadScenarios(): Promise<ScenarioInfo[]> {
   try {
     const res = await fetch('/mock/scenarios.json')
@@ -183,6 +220,7 @@ export async function submitReview(reportId: string, request: ReviewRequest): Pr
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request),
+    signal: AbortSignal.timeout(READ_TIMEOUT_MS),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
@@ -202,7 +240,7 @@ export async function submitReview(reportId: string, request: ReviewRequest): Pr
  */
 async function getJSON<T>(path: string): Promise<Fetched<T>> {
   try {
-    const res = await fetch(path)
+    const res = await fetch(path, { signal: AbortSignal.timeout(READ_TIMEOUT_MS) })
     if (!res.ok) return { data: null, failed: true }
     return { data: (await res.json()) as T, failed: false }
   } catch {
@@ -253,6 +291,7 @@ export async function savePolicy(policy: CriticPolicy): Promise<CriticPolicy> {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(policy),
+    signal: AbortSignal.timeout(READ_TIMEOUT_MS),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
@@ -289,6 +328,7 @@ export async function simulate(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ workload_id: workloadId, ...requests }),
+    signal: AbortSignal.timeout(READ_TIMEOUT_MS),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')

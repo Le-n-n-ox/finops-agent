@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import AsyncIterator, Literal
+from typing import Any, AsyncIterator, Callable, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -31,6 +31,26 @@ class AnalyzeRequest(BaseModel):
     mode: str = "agent"  # accepted for backward compatibility; the agent cycle always runs
 
 
+def _analyze_off_loop(svc: Services,
+                      on_workload: Callable[[Any], None] | None = None) -> AnalysisResponse:
+    """Run one analysis on a worker thread.
+
+    An analysis is CPU- and IO-heavy: the optimizer, the critic, the agent cycle and the database
+    writes. Run straight from the async endpoint it occupies the event loop for its whole duration,
+    so every other request - /api/health included - waits behind it and the whole API looks dead
+    while a run is in flight. Off the loop, the dashboard keeps answering during an analysis.
+
+    The analysis is driven through `asyncio.run` because it is written as coroutines, but nothing
+    in it waits on real IO: the only awaited call is the model client.
+
+    `on_workload` is called with each workload's result as it is finished, so a caller can report
+    the run as it happens. It is called from this thread, so a caller that hands results to an
+    event loop has to do the hand-off itself.
+    """
+    return asyncio.run(run_and_record(svc.store, mode="agent", inputs_fn=svc.inputs_fn,
+                                      on_workload=on_workload))
+
+
 @router.post("/analyze", response_model=AnalysisResponse)
 async def analyze(req: AnalyzeRequest | None = None, svc: Services = Depends(get_services)) -> AnalysisResponse:
     """Triggers the FinOps Agent analysis and returns structured results.
@@ -46,8 +66,7 @@ async def analyze(req: AnalyzeRequest | None = None, svc: Services = Depends(get
     """
     with api_errors():
         # `mode` is deliberately not read: the agent cycle always runs.
-        return await run_and_record(svc.store, mode=(req.mode if req else "agent"),
-                                    inputs_fn=svc.inputs_fn)
+        return await asyncio.to_thread(_analyze_off_loop, svc)
 
 
 def _sse(event: str, payload: object) -> str:
@@ -75,19 +94,26 @@ async def analyze_stream(req: AnalyzeRequest | None = None,
     | `error` | `{"detail": "..."}`, when the run could not be completed. |
     """
     queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
 
-    async def run() -> None:
+    def publish(kind: str, payload: Any) -> None:
+        """Hand a result from the worker thread to the event loop.
+
+        The analysis runs on a worker thread so it does not occupy the event loop, and
+        `asyncio.Queue` is not safe to touch from another thread. `call_soon_threadsafe` is the
+        documented way to wake the loop from elsewhere, so that is what carries the result.
+        """
+        loop.call_soon_threadsafe(queue.put_nowait, (kind, payload))
+
+    def run() -> None:
         try:
-            response = await run_and_record(
-                svc.store, mode=(req.mode if req else "agent"), inputs_fn=svc.inputs_fn,
-                on_workload=lambda result: queue.put_nowait(("workload", result)),
-            )
-            await queue.put(("done", response))
+            response = _analyze_off_loop(svc, on_workload=lambda result: publish("workload", result))
+            publish("done", response)
         except Exception as exc:  # noqa: BLE001 - the stream has to say what went wrong
-            await queue.put(("error", {"detail": f"{type(exc).__name__}: {exc}"}))
+            publish("error", {"detail": f"{type(exc).__name__}: {exc}"})
 
     async def frames() -> AsyncIterator[str]:
-        task = asyncio.create_task(run())
+        task = asyncio.create_task(asyncio.to_thread(run))
         try:
             # How many workloads there are, before the first one is finished. Without it a
             # progress bar has no denominator, and "1 of ?" is not a progress bar.

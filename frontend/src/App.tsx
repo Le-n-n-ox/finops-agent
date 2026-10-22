@@ -1,23 +1,32 @@
-import { useEffect, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { FileDown, FileJson2, History, Info, Lock, Printer, RefreshCw, ServerCog, ShieldCheck, TriangleAlert } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
+import { Info, PanelLeftClose, PanelLeftOpen, RefreshCw, TriangleAlert, X } from 'lucide-react'
+import { fetchDashboard, fetchEvents, fetchLLMStatus, fetchWorkloadRows, streamAnalysis, type LoadResult } from '@/api'
+import type { DecisionStatus, DashboardSummary, EventRow, LLMStatus, WorkloadResult, WorkloadRow } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { cn } from '@/lib/utils'
 import { buildReport, downloadText } from '@/lib/report'
+import { cn } from '@/lib/utils'
+import { goHome, goLanding, goToWorkload, useHashRoute } from '@/hooks/useHashRoute'
+import LandingPage from '@/components/landing/LandingPage'
 import AppToaster from '@/components/AppToaster'
-import ThemeToggle from '@/components/ThemeToggle'
-import ScenarioSwitcher from '@/components/ScenarioSwitcher'
+import Navbar, { Toolbar } from '@/components/Navbar'
+import Sidebar, { type View } from '@/components/Sidebar'
+import WorkloadPage from '@/components/WorkloadPage'
+import Workflow from '@/components/Workflow'
+import InputStatus from '@/components/InputStatus'
+import SummaryCards from '@/components/SummaryCards'
+import DecisionDonut from '@/components/DecisionDonut'
+import SavingsChart from '@/components/SavingsChart'
+import SavingsPotential from '@/components/SavingsPotential'
+import TrendChart from '@/components/TrendChart'
+import EventTimeline from '@/components/EventTimeline'
+import PolicyPanel from '@/components/PolicyPanel'
+import DecisionHistory from '@/components/DecisionHistory'
 import ProvenanceStrip from '@/components/ProvenanceStrip'
-import { useAnalysis } from '@/state/analysis-context'
-import { useRouter } from '@/state/router-context'
-import type { AnalysisResponse } from '@/types'
-import Overview from '@/pages/Overview'
-import Workloads from '@/pages/Workloads'
-import Evidence from '@/pages/Evidence'
-import PolicyPage from '@/pages/PolicyPage'
-import HistoryPage from '@/pages/HistoryPage'
+import ResultsTable from '@/components/ResultsTable'
+import Band from '@/components/Band'
+import TopOpportunities from '@/components/TopOpportunities'
 
 function LoadingSkeleton() {
   return (
@@ -25,6 +34,7 @@ function LoadingSkeleton() {
       <Skeleton className="h-20" />
       <Skeleton className="h-32" />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">{Array.from({ length: 6 }, (_, i) => <Skeleton key={i} className="h-24" />)}</div>
+      <div className="grid gap-6 md:grid-cols-2"><Skeleton className="h-56" /><Skeleton className="h-56" /></div>
       <Skeleton className="h-64" />
     </div>
   )
@@ -81,56 +91,229 @@ function RunProgress({ done, total, startedAt, model }: {
 }
 
 /**
- * What ran, said in words the reader can act on.
+ * The analysis as it stands, with one more workload folded in.
  *
- * The badge must never imply a language model ran when it did not: a reviewer who believes a
- * model was called reads a different kind of trust into the objections than the code supports.
- * So the live case names the model, and the stand-in case says so plainly.
- *
- * Three outcomes, not two, because "the stand-in answered" and "nothing is recorded about
- * which reasoner answered" are different facts. A report stored before the field existed, and
- * the bundled mock fixtures, have no `llm_backend` at all - neither of them is a stand-in run,
- * and neither may be described as one.
+ * The streamed run puts each workload on screen as it is finished, so the summary is recomputed
+ * from the results in hand - the numbers on screen always match the rows on screen.
  */
-function modelBadge(data: AnalysisResponse): { text: string; live: boolean; title: string } {
-  if (data.llm_backend === 'openai-compatible') {
-    return {
-      text: data.llm_model ?? 'live model',
-      live: true,
-      title: `Language model ${data.llm_model ?? ''} answered the agent turns.`.trim(),
-    }
-  }
-  if (data.llm_backend === 'simulated') {
-    return {
-      text: 'no live model (deterministic stand-in)',
-      live: false,
-      title: 'The model server was not reachable, so the deterministic stand-in answered the agent turns. No language model ran.',
-    }
-  }
+function mergeWorkload(current: LoadResult | null, result: WorkloadResult): LoadResult {
+  const base = current?.data
+  const results = [...(base?.results ?? []), result]
   return {
-    text: 'no live model (not recorded)',
-    live: false,
-    title: 'This response does not record which reasoner answered, so no language model is claimed to have run.',
+    data: {
+      analysis_id: base?.analysis_id ?? 'running',
+      generated_at: base?.generated_at ?? new Date().toISOString(),
+      mode: base?.mode ?? 'agent',
+      summary: {
+        workloads_evaluated: results.length,
+        approved: results.filter((r) => r.decision === 'approved').length,
+        deferred: results.filter((r) => r.decision === 'deferred').length,
+        rejected: results.filter((r) => r.decision === 'rejected').length,
+        needs_review: results.filter((r) => r.decision === 'needs_review').length,
+        no_change: results.filter((r) => r.decision === 'no_change').length,
+        estimated_monthly_savings_usd: results
+          .filter((r) => r.decision === 'approved')
+          .reduce((sum, r) => sum + (r.monthly_savings_estimate_usd ?? 0), 0),
+      },
+      results,
+      warnings: base?.warnings ?? [],
+      policy_version: base?.policy_version,
+      rule_version: base?.rule_version,
+      input_fingerprint: base?.input_fingerprint,
+      top_n_findings: base?.top_n_findings ?? 5,
+      top_opportunities: base?.top_opportunities ?? [],
+      llm_backend: base?.llm_backend,
+      llm_model: base?.llm_model,
+      llm_base_url: base?.llm_base_url,
+    },
+    source: 'api',
   }
 }
 
-/**
- * The one reasoning path. The response's `mode` field still describes the run (for example
- * "demo" when the fixed demo clock is in use), but the path itself is always the agent cycle.
- */
-const REASONING_PATH = 'agent cycle'
-
-const PAGES = [
-  { path: '/', label: 'Overview', icon: ShieldCheck },
-  { path: '/workloads', label: 'Workloads', icon: ServerCog },
-  { path: '/evidence', label: 'Evidence', icon: Info },
-  { path: '/policy', label: 'Policy', icon: Lock },
-  { path: '/history', label: 'History', icon: History },
-] as const
+/** The backend reports "demo" when the fixed demo clock is in use. Say what it means. */
+const MODE_LABEL: Record<string, string> = {
+  agent: 'agent cycle',
+  demo: 'deterministic pipeline',
+  pipeline: 'deterministic pipeline',
+}
 
 export default function App() {
-  const { state, error, loading, scenario, setScenario, reload, llmStatus, progress } = useAnalysis()
-  const { path, navigate } = useRouter()
+  const [state, setState] = useState<LoadResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [scenario, setScenario] = useState('all')
+  const [filter, setFilter] = useState<DecisionStatus | 'all'>('all')
+  const [view, setView] = useState<View>('analysis')
+  const [dashboard, setDashboard] = useState<DashboardSummary | null>(null)
+  const [events, setEvents] = useState<EventRow[] | null>(null)
+  const [workloadRows, setWorkloadRows] = useState<WorkloadRow[] | null>(null)
+  const [navOpen, setNavOpen] = useState(false)
+  // Which model server the backend resolved, read when the app opens so the header can name it
+  // before anything has been produced.
+  const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(null)
+  // How far the run has got. The totals come from the backend, so the bar is honest about how
+  // much is left even before the first workload is finished.
+  const [progress, setProgress] = useState({ done: 0, total: 0, startedAt: 0 })
+  // The route is the URL: a workload opens on its own page, everything else is the dashboard.
+  const route = useHashRoute()
+  // The landing page is the front door and needs no analysis behind it, so nothing is run
+  // until the reader steps into the workspace. This is a boolean rather than the route kind,
+  // because home and workload are both "in the workspace" and must not restart the run.
+  const inWorkspace = route.kind !== 'landing'
+
+  // The rail can be folded down to its icons to give the tables and charts the width back.
+  // The choice is remembered, because re-collapsing it on every reload is a small daily tax.
+  const [railCollapsed, setRailCollapsed] = useState(
+    () => localStorage.getItem('finops.rail-collapsed') === '1',
+  )
+  useEffect(() => {
+    localStorage.setItem('finops.rail-collapsed', railCollapsed ? '1' : '0')
+  }, [railCollapsed])
+
+  // The bar wraps to two rows on narrow screens, so its height is not a constant. Measuring it
+  // keeps the sidebar flush against the bar instead of guessing a pixel value that goes stale.
+  const navRef = useRef<HTMLElement>(null)
+  const [navHeight, setNavHeight] = useState(0)
+  useEffect(() => {
+    const el = navRef.current
+    if (!el) return
+    const observer = new ResizeObserver(([entry]) => setNavHeight(entry.contentRect.height))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  // The drawer is a modal on small screens: Escape closes it and the page behind it must not
+  // scroll away under the user's finger.
+  useEffect(() => {
+    if (!navOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNavOpen(false) }
+    document.addEventListener('keydown', onKey)
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = ''
+    }
+  }, [navOpen])
+
+  // Widening the window to desktop while the drawer is open would leave the page scroll-locked
+  // with an invisible drawer on top of it. The listener, rather than a plain effect, means the
+  // drawer is closed by the resize itself and not on every render that follows it.
+  useEffect(() => {
+    const mq = matchMedia('(min-width: 1024px)')
+    const on = (e: MediaQueryListEvent) => { if (e.matches) setNavOpen(false) }
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+
+  // A newer run supersedes the one in flight. The request is aborted so the backend is not asked
+  // to do work nobody is waiting for, and the run id keeps a superseded run from overwriting the
+  // results of the run that replaced it. Without this, React StrictMode's double-invoked effect
+  // leaves two analyses writing to the same store at once.
+  const runIdRef = useRef(0)
+  const abortRef = useRef<AbortController | null>(null)
+
+  const load = useCallback(async () => {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    const runId = ++runIdRef.current
+
+    setLoading(true)
+    setError(null)
+    setProgress({ done: 0, total: 0, startedAt: Date.now() })
+    try {
+      // The run is streamed. A full analysis is a multi-turn conversation with the model server
+      // for every workload, so it takes minutes - and each workload is put on screen as it is
+      // finished rather than the whole run arriving at the end. A slow run and a stuck run have
+      // to look different, and the only way to tell them apart is to show the work happening.
+      const res = await streamAnalysis(
+        scenario,
+        (result) => {
+          if (runId !== runIdRef.current) return
+          setState((current) => mergeWorkload(current, result))
+          setProgress((p) => ({ ...p, done: p.done + 1 }))
+        },
+        (total) => { if (runId === runIdRef.current) setProgress((p) => ({ ...p, total })) },
+        controller.signal,
+      )
+      if (runId !== runIdRef.current) return
+      setState(res)
+      setFilter('all')
+      // single-workload scenarios open their detail straight away (demo flow)
+      if (res.data.results.length === 1) goToWorkload(res.data.results[0].workload_id)
+      // History and events come from separate endpoints. A failure there must not fail the page, but
+      // it must not leave the previous run's numbers on screen either: a stale trend is worse than
+      // no trend, because it looks current.
+      void fetchDashboard().then((d) => { if (runId === runIdRef.current) setDashboard(d.data) })
+      void fetchEvents().then((e) => { if (runId === runIdRef.current) setEvents(e.data) })
+      void fetchWorkloadRows().then((w) => { if (runId === runIdRef.current) setWorkloadRows(w.data) })
+    } catch (e) {
+      // A superseded run is not a failure; the run that replaced it owns the screen now.
+      if (runId !== runIdRef.current) return
+      setError(e instanceof Error ? e.message : 'Failed to load analysis')
+    } finally {
+      if (runId === runIdRef.current) setLoading(false)
+    }
+  }, [scenario])
+
+  useEffect(() => {
+    if (!inWorkspace) return
+    void load()
+    return () => { abortRef.current?.abort() }
+  }, [load, inWorkspace])
+
+  // Which model server the backend resolved, read when the app opens - not after the first
+  // analysis, by which time the badge has already taken the response's word for it and this
+  // branch would be unreachable. A failure here is not fatal: the analysis response carries the
+  // same facts, and a backend without the endpoint must not stop the app.
+  useEffect(() => {
+    void fetchLLMStatus().then((s) => { if (s.data) setLlmStatus(s.data) })
+  }, [])
+
+  const visible = useMemo(
+    () => (state?.data.results ?? []).filter((r) => filter === 'all' || r.decision === filter),
+    [state, filter],
+  )
+  const selected = state?.data.results.find((r) => r.workload_id === (route.kind === 'workload' ? route.workloadId : null)) ?? null
+
+  // Which reasoner answered the agent's turns, said in words the reader can act on.
+  //
+  // The badge must never imply a language model ran when it did not: a reviewer who believes a
+  // model was called reads a different kind of trust into the objections than the code supports.
+  // Three outcomes, because "the stand-in answered" and "nothing is recorded about which
+  // reasoner answered" are different facts.
+  const modelBadge: { text: string; live: boolean; title: string } | null = (() => {
+    const backend = state?.data.llm_backend ?? llmStatus?.backend
+    const model = state?.data.llm_model ?? llmStatus?.model
+    if (backend === 'openai-compatible') {
+      return {
+        text: `Live model · ${model ?? 'unknown'}`,
+        live: true,
+        title: `Language model ${model ?? ''} answered the agent turns.`.trim(),
+      }
+    }
+    if (backend === 'simulated') {
+      return {
+        text: 'No live model (deterministic stand-in)',
+        live: false,
+        title: 'The model server was not reachable, so the deterministic stand-in answered the agent turns. No language model ran.',
+      }
+    }
+    if (backend) {
+      return {
+        text: 'No live model (not recorded)',
+        live: false,
+        title: 'This response does not record which reasoner answered, so no language model is claimed to have run.',
+      }
+    }
+    return null
+  })()
+
+  // The what-if needs a stored report on the backend to re-decide against. Offline it cannot run,
+  // and saying so is better than a raw error toast.
+  const simulatorUnavailable = state?.source === 'mock'
+    ? 'The what-if needs the backend to re-run the critic, so it is unavailable while the app is running on mock data.'
+    : undefined
 
   const exportReport = async (format: 'markdown' | 'json') => {
     if (!state) return
@@ -155,131 +338,198 @@ export default function App() {
     }
   }
 
-  // An unknown path is a stale link, not an error: send it to the overview rather than a 404.
-  const known = PAGES.some((p) => p.path === path)
-  const active = known ? path : '/'
+  // Picking a section leaves the workload page: the sections are the dashboard's own views, and
+  // a workload page is a page of its own.
+  const pickView = (next: View) => {
+    setView(next)
+    goHome()
+  }
 
-  useEffect(() => {
-    if (!known) navigate('/', { replace: true })
-  }, [known, navigate])
+  // The controls live in two places: the top bar on wide screens, the drawer on narrow ones.
+  // They are described once here so the two surfaces can never drift apart.
+  const toolbar = {
+    source: state?.source ?? null,
+    modeLabel: state ? MODE_LABEL[state.data.mode] ?? state.data.mode : '',
+    modelBadge,
+    scenario,
+    onScenarioChange: setScenario,
+    loading,
+    onRun: () => void load(),
+    canExport: !!state,
+    onExport: (format: 'markdown' | 'json') => void exportReport(format),
+  }
 
-  // The badge names what actually ran. It must never imply a language model ran when it did not:
-  // a reviewer who believes a model was called reads a different kind of trust into the
-  // objections than the code supports.
-  const badge = state
-    ? state.source === 'api'
-      ? (() => {
-          const m = modelBadge(state.data)
-          return { text: `Live API · ${REASONING_PATH} · ${m.text}`, live: m.live, title: m.title }
-        })()
-      : { text: 'Mock data · API offline · no live model', live: false, title: 'Bundled fixtures, not a backend run.' }
-    : llmStatus
-      ? {
-          text: llmStatus.backend === 'openai-compatible'
-            ? `Model server · ${llmStatus.model ?? 'live model'}`
-            : 'Model server unavailable · deterministic stand-in',
-          live: llmStatus.backend === 'openai-compatible',
-          title: llmStatus.detail ?? 'The model server has not been contacted yet.',
-        }
-      : null
+  // The landing page has its own chrome, and none of the workspace's state applies to it.
+  if (!inWorkspace) return <LandingPage />
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6 px-4 py-8">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <span className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground"><ServerCog className="size-5" aria-hidden /></span>
-          <div>
-            <h1 className="text-xl leading-tight font-semibold">Kubernetes FinOps Agent</h1>
-            <p className="text-sm text-muted-foreground">Evidence-based, multi-agent resource recommendations</p>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline"><Lock aria-hidden />Recommendation-only</Badge>
-          {badge && (
-            <Badge
-              variant="outline"
-              className={cn(
-                badge.live
-                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300'
-                  : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200',
+    <div className="min-h-screen">
+      <Navbar {...toolbar} ref={navRef} navOpen={navOpen} onOpenNav={() => setNavOpen(true)} />
+
+      <div className="mx-auto flex w-full max-w-[1600px]">
+        <aside className={cn('app-rail hidden shrink-0 lg:block', railCollapsed ? 'w-16' : 'w-60')}>
+          <div className="sticky top-16 flex flex-col" style={navHeight ? { top: navHeight } : undefined}>
+            <div className="flex-1 py-6">
+              {!railCollapsed && (
+                <p className="mb-2 px-3 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Workspace</p>
               )}
-              title={badge.title}
-            >
-              {badge.text}
-            </Badge>
+              <Sidebar
+                id="app-rail-nav"
+                view={route.kind === 'workload' ? 'analysis' : view}
+                onViewChange={pickView}
+                collapsed={railCollapsed}
+                onOverview={goLanding}
+              />
+            </div>
+            <div className={cn('border-t py-3', railCollapsed ? 'flex justify-center' : 'px-3')}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setRailCollapsed((c) => !c)}
+                aria-expanded={!railCollapsed}
+                aria-controls="app-rail-nav"
+                aria-label={railCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                title={railCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+                className={cn(railCollapsed && 'size-8 p-0')}
+              >
+                {railCollapsed ? <PanelLeftOpen aria-hidden /> : <PanelLeftClose aria-hidden />}
+                {!railCollapsed && <span>Collapse</span>}
+              </Button>
+            </div>
+          </div>
+        </aside>
+
+        <main className="min-w-0 flex-1 space-y-6 px-4 py-6 lg:px-6">
+
+          {error && !state ? (
+            // Nothing to show and no data: say what went wrong and offer a retry, rather than
+            // leaving an empty page that looks like the app is broken.
+            <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-6 text-center dark:border-red-900 dark:bg-red-950">
+              <p className="flex items-start justify-center gap-2 text-sm font-medium text-red-800 dark:text-red-200">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />{error}
+              </p>
+              <Button variant="outline" size="sm" className="mt-4" onClick={() => void load()}>
+                <RefreshCw aria-hidden />Try again
+              </Button>
+            </div>
+          ) : error && (
+            <p role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
+              <TriangleAlert className="size-4 shrink-0" aria-hidden />{error}
+            </p>
           )}
-          {state?.source === 'mock' && <ScenarioSwitcher value={scenario} onChange={setScenario} />}
-          <div className="flex items-center gap-2 print:hidden">
-            <Button variant="outline" size="icon" onClick={() => void exportReport('markdown')} disabled={!state} aria-label="Export report as Markdown" title="Export report (Markdown)"><FileDown /></Button>
-            <Button variant="outline" size="icon" onClick={() => void exportReport('json')} disabled={!state} aria-label="Export audit data as JSON" title="Export audit data (JSON)"><FileJson2 /></Button>
-            <Button variant="outline" size="icon" onClick={() => window.print()} disabled={!state} aria-label="Print or save as PDF" title="Print / save as PDF"><Printer /></Button>
-            <ThemeToggle />
-            <Button onClick={() => void reload()} disabled={loading}>
-              <RefreshCw className={cn(loading && 'animate-spin')} aria-hidden />{loading ? 'Running…' : 'Run analysis'}
-            </Button>
+          {loading && !state && !error && <LoadingSkeleton />}
+
+          {loading && (
+            <RunProgress
+              done={progress.done}
+              total={progress.total}
+              startedAt={progress.startedAt}
+              model={state?.data.llm_model ?? llmStatus?.model}
+            />
+          )}
+
+          {state && (
+            <>
+              {route.kind === 'workload' ? (
+                selected ? (
+                  <WorkloadPage
+                    result={selected}
+                    reportId={state.data.analysis_id}
+                    onBack={goHome}
+                    simulatorUnavailable={simulatorUnavailable}
+                  />
+                ) : (
+                  <div className="rounded-xl border border-dashed p-10 text-center">
+                    <p className="text-sm font-medium">{route.workloadId} is not in this analysis</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      It may have been analysed under a different scenario or policy. Run the analysis again, or go back to the workload list.
+                    </p>
+                    <Button variant="outline" size="sm" className="mt-4" onClick={goHome}>Back to all workloads</Button>
+                  </div>
+                )
+              ) : view === 'policy' ? (
+                <PolicyPanel onSaved={() => void load()} />
+              ) : view === 'history' ? (
+                <DecisionHistory />
+              ) : (
+                <>
+              {state.data.warnings.map((w) => (
+                <p key={w} className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                  <Info className="size-4 shrink-0" aria-hidden />{w}
+                </p>
+              ))}
+
+              {/* The page is one long report. Three bands, so a reader who lands in the middle
+                  of it knows whether they are looking at how the run went, what it found, or the
+                  evidence behind the finding. */}
+              <div className="space-y-8">
+                <section className="space-y-4" aria-label="How the run went">
+                  <Band title="How the run went" />
+                  <ProvenanceStrip data={state.data} />
+                  <Workflow data={state.data} />
+                  <InputStatus data={state.data} />
+                </section>
+
+                <section className="space-y-4" aria-label="What it found">
+                  <Band title="What it found" />
+                  <SummaryCards summary={state.data.summary} active={filter} onFilter={setFilter} />
+                  {!!state.data.top_opportunities?.length && (
+                    <TopOpportunities items={state.data.top_opportunities} />
+                  )}
+                  <SavingsPotential results={state.data.results} />
+                </section>
+
+                <section className="space-y-4" aria-label="The evidence">
+                  <Band title="The evidence" />
+                  <div className="grid gap-6 md:grid-cols-2">
+                    <DecisionDonut summary={state.data.summary} active={filter} onFilter={setFilter} />
+                    <SavingsChart results={state.data.results} />
+                  </div>
+                  <div className="grid gap-6 lg:grid-cols-2">
+                    <TrendChart trend={dashboard?.trend ?? []} />
+                    <EventTimeline events={events ?? []} now={state.data.generated_at} />
+                  </div>
+                  <ResultsTable
+                    results={visible}
+                    selectedId={null}
+                    onSelect={(id) => goToWorkload(id)}
+                    workloadRows={workloadRows}
+                  />
+                  <footer className="border-t pt-4 text-xs text-muted-foreground">
+                    Prototype using local/mock data. Savings are illustrative estimates, not guaranteed bill reductions. Every change requires human approval; nothing is applied to a cluster.
+                  </footer>
+                </section>
+              </div>
+                </>
+              )}
+            </>
+          )}
+
+        </main>
+      </div>
+
+      {navOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden print:hidden" role="dialog" aria-modal="true" aria-label="Navigation" id="mobile-nav">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setNavOpen(false)} />
+          <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col gap-4 overflow-y-auto border-r bg-background p-4 shadow-xl animate-in slide-in-from-left duration-200">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold">Navigation</span>
+              <Button variant="ghost" size="icon" onClick={() => setNavOpen(false)} aria-label="Close navigation">
+                <X />
+              </Button>
+            </div>
+            <Sidebar
+              view={route.kind === 'workload' ? 'analysis' : view}
+              onViewChange={pickView}
+              onNavigate={() => setNavOpen(false)}
+              onOverview={goLanding}
+            />
+            <div className="border-t pt-4">
+              <Toolbar {...toolbar} layout="stack" />
+            </div>
           </div>
         </div>
-      </header>
-
-      {error && (
-        <p role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
-          <TriangleAlert className="size-4 shrink-0" aria-hidden />{error}
-        </p>
       )}
-      {loading && progress.done === 0 && <LoadingSkeleton />}
-
-      {loading && (
-        <RunProgress
-          done={progress.done}
-          total={progress.total}
-          startedAt={progress.startedAt}
-          model={state?.data.llm_model ?? llmStatus?.model}
-        />
-      )}
-
-      {/*
-        The navigation is outside the analysis block on purpose. Policy and History do not need
-        an analysis - the policy editor fetches its own policy and the history page its own
-        decisions - so a failed analysis must not take them out of reach. The pages that do need
-        the analysis already render nothing when it is missing.
-      */}
-      <nav className="flex flex-wrap gap-1 border-b print:hidden" aria-label="Sections">
-        {PAGES.map(({ path: to, label, icon: Icon }) => (
-          <button
-            key={to}
-            onClick={() => navigate(to)}
-            aria-current={active === to ? 'page' : undefined}
-            className={cn(
-              'flex items-center gap-1.5 px-3 py-2 text-sm font-medium -mb-px border-b-2 transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50',
-              active === to ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
-            )}
-          >
-            <Icon className="size-4" aria-hidden />{label}
-          </button>
-        ))}
-      </nav>
-
-      {state && (
-        <>
-          <ProvenanceStrip data={state.data} source={state.source} />
-
-          {state.data.warnings.map((w) => (
-            <p key={w} className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
-              <Info className="size-4 shrink-0" aria-hidden />{w}
-            </p>
-          ))}
-        </>
-      )}
-
-      {active === '/' && <Overview />}
-      {active === '/workloads' && <Workloads />}
-      {active === '/evidence' && <Evidence />}
-      {active === '/policy' && <PolicyPage />}
-      {active === '/history' && <HistoryPage />}
-
-      <footer className="border-t pt-4 text-xs text-muted-foreground">
-        Prototype using local/mock data. Savings are illustrative estimates, not guaranteed bill reductions. Every change requires human approval; nothing is applied to a cluster.
-      </footer>
 
       <AppToaster />
     </div>
