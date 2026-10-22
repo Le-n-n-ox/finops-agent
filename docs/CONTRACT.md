@@ -70,6 +70,21 @@ Review records gained `rejection_reasons: list[str]`, `resource: str | None`, an
 | `GET /api/policies/defaults` | The built-in `CriticPolicy` defaults, so the policy editor can offer a reset. Nothing is stored by reading it. `GET /api/policies` still returns the live policy. |
 | `GET /api/validation` | Already existed; `AnalysisResponse.data_health` now carries the same `ValidationResponse` the endpoint returns, computed from the bundle that produced the analysis. |
 | `GET /api/llm/status` | Which language model backend is in use, before any analysis has run. |
+| `POST /api/analyze/stream` | The same analysis as `POST /api/analyze`, reported as it happens. |
+
+`POST /api/analyze/stream` is a server-sent event stream. A full analysis is a multi-turn
+conversation with the model server for every workload, so it takes minutes - and a caller that
+sees nothing until the end has no way to tell a slow run from a stuck one. The events are:
+
+| Event | Payload |
+|---|---|
+| `start` | `{"total": n}` — how many workloads there are, so a progress bar has a denominator. |
+| `workload` | One `WorkloadResult`, as it is finished. |
+| `done` | The complete `AnalysisResponse` — the same one `POST /api/analyze` returns. |
+| `error` | `{"detail": "..."}`, when the run could not be completed. |
+
+`POST /api/analyze` is unchanged: it waits for the whole run and returns the response in one
+piece. The two run exactly the same analysis; only the timing of the results differs.
 
 `AnalysisResponse.data_health` was already in the schema but was never populated. It is now filled in by the agent path, so the UI can show per-workload metric completeness and freshness without a second call.
 

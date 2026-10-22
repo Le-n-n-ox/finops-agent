@@ -46,6 +46,13 @@ reviewer who opens a workload and goes back loses their place entirely.
 The analysis itself is loaded **once**, in `src/state/AnalysisProvider.tsx`, and shared by every
 page. Otherwise each page would re-run the analysis on navigation.
 
+The run is **streamed**. A full analysis is a multi-turn conversation with the model server for
+every workload, so it takes minutes rather than seconds — and the page shows each workload as it
+is reviewed, with a progress bar, a count of how many are done, and a running elapsed time. A
+slow run has to be distinguishable from a stuck one, and the elapsed time is what tells them
+apart. `POST /api/analyze/stream` sends the results as they are finished;
+`POST /api/analyze` still returns the whole response in one piece.
+
 ## The agent cycle and the model disclosure
 
 There is one reasoning path. The backend always runs the **agent cycle** (Proposer → Critic →
