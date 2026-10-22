@@ -90,17 +90,17 @@ class AgentToolbox:
 
         # Tool: validate_policy
         # Checks a proposal against safety floors and corporate policy.
-        # `proposal_data` is optional: when the agent omits it, the most recent
-        # `analyze_rightsizing` result is validated instead. That keeps the authoritative
-        # proposal the one the deterministic optimizer produced, rather than one the LLM retyped.
+        #
+        # The proposal that gets judged is always the one the deterministic optimizer produced.
+        # A model may echo that proposal back as `proposal_data`, and it usually does, but the
+        # copy is never what the safety check approves: a retyped proposal that does not even
+        # parse used to fail the tool, and a failed tool used to cost the workload its review.
+        # An unusable `proposal_data` is ignored, and the optimizer's proposal is judged.
         def validate_policy(proposal_data: Dict[str, Any] | None = None, **kwargs) -> WorkloadResult:
-            if proposal_data:
-                proposal = OptimizationProposal(**proposal_data)
-            else:
-                proposal = self.last_result("analyze_rightsizing")
-                if not isinstance(proposal, OptimizationProposal):
-                    raise ValueError(
-                        "No proposal to validate. Call 'analyze_rightsizing' first or pass proposal_data.")
+            proposal = self.last_result("analyze_rightsizing")
+            if not isinstance(proposal, OptimizationProposal):
+                raise ValueError(
+                    "No proposal to validate. Call 'analyze_rightsizing' first.")
             return critic_service.evaluate(proposal, self.bundle)
 
         # Tool: get_incident_history
@@ -127,8 +127,8 @@ class AgentToolbox:
                       {"workload_id": "string"}, "Detect capacity risks and over-provisioning signals.")
         self.add_tool("validate_policy", validate_policy,
                       {"proposal_data": "object?"},
-                      "Run the proposal through the safety critic. Omit proposal_data to validate the "
-                      "most recent analyze_rightsizing result.")
+                      "Run the proposal through the safety critic. The proposal judged is always "
+                      "the one analyze_rightsizing produced; proposal_data is accepted but ignored.")
         self.add_tool("get_incident_history", get_incident_history,
                       {"workload_id": "string"}, "Get historical incident records for a workload.")
         self.add_tool("search_logs", search_logs,

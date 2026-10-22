@@ -3,14 +3,21 @@
 Every agent step goes through app.integrations.meterless_runner.get_runner(), so Meterless can be swapped in
 without touching business logic. The Dev 1 entry points are resolved lazily so this module imports cleanly
 even while they are still being written.
+
+There is ONE reasoning path now: the Proposer -> Critic -> Judge cycle, backed by a live
+OpenAI-compatible model server when one is reachable. The deterministic optimizer + critic stay
+as the safety model (they own every final decision, and the `validate_policy` tool calls them),
+but they are no longer a selectable alternative to the agent cycle.
 """
 from __future__ import annotations
 
 import os
 import hashlib
+import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Any
+from typing import Callable, Any, Dict
 
 from app.integrations.meterless_runner import AgentRunner, get_runner
 from app.models.schemas import (
@@ -30,10 +37,133 @@ from app.services.critic_service import evaluate
 from app.services.fingerprints import fingerprint
 from app.services.report_service import with_patch
 from app.services.store import Store
-from app.services.agent_orchestrator import AgentOrchestrator
+from app.services.agent_orchestrator import AgentOrchestrator, deterministic_result
 from app.services.validation_service import validation_from_bundle
 
+logger = logging.getLogger(__name__)
+
 DISCLAIMER = "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
+
+# Anything that looks like a credential in a message that is about to be published. The client
+# already scrubs its own token; this catches a third-party error that echoes a header. The
+# patterns are applied in order, so the value is removed before the label that introduces it.
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)\bbearer\s+\S+"),
+    re.compile(r"(?i)\bauthorization[:=]\s*\S+"),
+    re.compile(r"(?i)\b(?:api[_-]?key|token|secret|password)[:=]\s*\S+"),
+)
+
+
+def _scrub(text: str) -> str:
+    """Strip anything that looks like a credential out of a message bound for the response."""
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    return text
+
+
+def _name_the_workloads(affected: dict[str, str], limit: int = 3) -> str:
+    """Name the affected workloads and their causes, in a form a reader can scan.
+
+    A model server that stays down affects every workload, and a warning that names all twelve
+    is unreadable. The count is always exact, so nothing is hidden by the cap; the per-result
+    disclosure names the rest.
+    """
+    items = list(affected.items())
+    shown = "; ".join(f"{name} ({reason})" for name, reason in items[:limit])
+    if len(items) > limit:
+        shown += f"; and {len(items) - limit} more"
+    return shown
+
+
+def _short_reason(exc: BaseException, limit: int = 200) -> str:
+    """One line naming why a workload fell back, safe to publish in the response.
+
+    The text can be anything the failing code put into the exception, and this string ends up in
+    the API response, so it is flattened to one line, truncated, and scrubbed of anything that
+    looks like a credential. A transport error that echoes a request header must not carry the
+    token into the UI.
+    """
+    text = " ".join(str(exc).split()) or type(exc).__name__
+    text = _scrub(text)
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return f"{type(exc).__name__}: {text}"
+
+# The shape of the LLM status the API publishes. The keys match app.integrations.llm_client.LLMStatus.
+LLM_STATUS_KEYS = ("backend", "model", "base_url", "key_source", "detail")
+
+
+def _status_of(status: Any) -> Dict[str, Any]:
+    """Normalise an LLM status into the five keys the API publishes."""
+    data = dict(status or {})
+    return {key: data.get(key) for key in LLM_STATUS_KEYS}
+
+
+def _simulated_status(detail: str) -> Dict[str, Any]:
+    return {"backend": "simulated", "model": None, "base_url": None, "key_source": None, "detail": detail}
+
+
+def _status_from_client(client: Any) -> Dict[str, Any]:
+    """Derive a status from a client that carries no status of its own."""
+    own = getattr(client, "status", None)
+    if isinstance(own, dict) and own.get("backend"):
+        return _status_of(own)
+
+    config = (getattr(client, "config", None) or getattr(client, "_config", None)
+              or getattr(client, "llm_config", None))
+    base_url = getattr(config, "base_url", None)
+    if base_url:
+        return {
+            "backend": "openai-compatible",
+            "model": getattr(config, "model", None),
+            "base_url": base_url,
+            "key_source": getattr(config, "key_source", None),
+            "detail": None,
+        }
+    return _simulated_status("The deterministic stand-in answered the agent turns; no model was called.")
+
+
+def resolve_llm() -> tuple[Any, Dict[str, Any]]:
+    """The model client for the agent cycle, and a status describing it.
+
+    `app.integrations.llm_client` owns credential discovery and the reachability probe: it returns
+    the live OpenAI-compatible client when a model server answered, and the deterministic
+    stand-in otherwise. The status travels with the client so the API can say out loud which one
+    ran - a reviewer who believes a model was called reads a different kind of trust into the
+    objections than the code supports.
+    """
+    try:
+        from app.integrations.llm_client import get_llm_client
+    except ImportError as exc:  # the client module is not in place yet
+        from app.services.simulated_llm import SimulatedLLMClient
+        return SimulatedLLMClient(), _simulated_status(f"The model client is unavailable: {exc}")
+
+    resolved = get_llm_client()
+    if isinstance(resolved, tuple) and len(resolved) == 2:
+        client, status = resolved
+    else:  # a client without a status: derive one so the response can still be honest
+        client, status = resolved, None
+    return client, _status_of(status) or _status_from_client(client)
+
+
+def llm_status_payload() -> Dict[str, Any]:
+    """The status of the model server, for GET /api/llm/status.
+
+    `detail` says WHY the deterministic stand-in was used, so the UI can say it out loud rather
+    than implying a model ran. The client is selected here, so the status describes the same
+    client the next analysis will use.
+    """
+    try:
+        _client, status = resolve_llm()
+        return _status_of(status)
+    except Exception:  # noqa: BLE001 - the status must never take the page down
+        pass
+
+    try:
+        from app.integrations.llm_client import llm_status
+        return _status_of(llm_status())
+    except Exception:  # noqa: BLE001
+        return _simulated_status("The model server has not been contacted yet.")
 
 
 def default_inputs() -> InputBundle:
@@ -148,17 +278,14 @@ async def run_analysis(now: datetime | None = None, **kwargs) -> AnalysisRespons
     The primary entry point for analysis. Uses the AgentOrchestrator to perform a deep,
     investigative review of all workloads through the Proposer -> Critic -> Judge cycle.
     """
-    # Using the Simulated LLM for prototype demonstration
-    from app.services.simulated_llm import SimulatedLLMClient
-    llm_client = SimulatedLLMClient()
-
-    response, _ = await run_analysis_agentic(now=now, llm_client=llm_client, **kwargs)
+    response, _ = await run_analysis_agentic(now=now, **kwargs)
     return response
 
 
 async def run_analysis_agentic(
     now: datetime | None = None,
     llm_client: Any = None,
+    llm_status: Dict[str, Any] | None = None,
     **kwargs
 ) -> tuple[AnalysisResponse, InputBundle]:
     """
@@ -167,20 +294,25 @@ async def run_analysis_agentic(
     Each workload goes through the full Proposer -> Critic -> Judge cycle. The agent's results ARE
     the results: they are aggregated here, not discarded in favour of a second deterministic run.
     A per-workload failure falls back to the deterministic pipeline for that workload only.
+
+    The model client is resolved from the live model server when one is reachable. When it is not,
+    the deterministic stand-in answers and the response says so: the UI must never imply a
+    language model ran when it did not.
     """
     bundle = kwargs.get("bundle") or default_inputs()
     now = now or bundle.policy.simulation_now or datetime.now(timezone.utc)
 
-    # In a real system, the llm_client would be injected via deps. The simulated client stands in
-    # for it so the cycle can run without a model behind it.
     if llm_client is None:
-        from app.services.simulated_llm import SimulatedLLMClient
-        llm_client = SimulatedLLMClient()
+        llm_client, llm_status = resolve_llm()
+    elif llm_status is None:
+        llm_status = _status_from_client(llm_client)
 
     orchestrator = AgentOrchestrator(bundle, llm_client, store=kwargs.get("store"))
     specs = {spec.name: spec for spec in bundle.services}
     results: list[WorkloadResult] = []
     audits: list[AgentAuditLog] = []
+    fallbacks: dict[str, str] = {}
+    degraded: dict[str, str] = {}
 
     for spec in bundle.services:
         try:
@@ -188,24 +320,37 @@ async def run_analysis_agentic(
             audits.append(audit)
             # Attach the validated patch exactly as the deterministic pipeline does.
             patched = with_patch(res, specs.get(spec.name))
-        except Exception:  # noqa: BLE001 - one bad workload must not sink the whole analysis
-            # Fail-safe: if the agent crashes, fallback to the deterministic pipeline for this workload
-            from app.services.optimizer_service import analyze_workload
-            prop = analyze_workload(spec, [r for r in bundle.usage_rows if r.service == spec.name],
-                                    bundle.policy.optimizer, now, bundle.cost_model,
-                                    incidents=bundle.incidents, events=bundle.events)
-            patched = with_patch(evaluate(prop, bundle, now), specs.get(spec.name))
+            if orchestrator.model_outage:
+                # The model server went away mid-review. The cycle still produced a verdict, but
+                # it is a shorter review than the others, and the report has to say so.
+                degraded[spec.name] = _scrub(orchestrator.model_outage)
+        except Exception as exc:  # noqa: BLE001 - one bad workload must not sink the whole analysis
+            # Fail-safe: if the agent crashes, fallback to the deterministic pipeline for this
+            # workload. The cause is logged and published: a silent fallback reads like a review
+            # that happened, and a reviewer has to be able to tell the difference.
+            logger.exception("The agent cycle failed for %s; the deterministic critic decided it.",
+                             spec.name)
+            patched = with_patch(deterministic_result(bundle, spec.name, now), specs.get(spec.name))
+            fallbacks[spec.name] = _short_reason(exc)
         # The usage chart and event band are UI-only fields. The agent path must attach them too,
         # or "Agent cycle" mode renders an empty chart where the pipeline shows 720 points.
         extra = _chart_data(spec.name, bundle, now)
         results.append(patched.model_copy(update=extra) if extra else patched)
 
     results.sort(key=lambda result: -(result.proposal.priority_score or 0.0))
-    return _aggregate(results, bundle, now), bundle
+    return _aggregate(results, bundle, now, llm_status=llm_status, fallbacks=fallbacks,
+                      degraded=degraded), bundle
 
 
-def _aggregate(results: list[WorkloadResult], bundle: InputBundle, now: datetime) -> AnalysisResponse:
-    """Turn a list of judged results into the AnalysisResponse the UI consumes."""
+def _aggregate(results: list[WorkloadResult], bundle: InputBundle, now: datetime,
+               llm_status: Dict[str, Any] | None = None,
+               fallbacks: dict[str, str] | None = None,
+               degraded: dict[str, str] | None = None) -> AnalysisResponse:
+    """Turn a list of judged results into the AnalysisResponse the UI consumes.
+
+    `llm_status` says which model actually answered the agent's turns. It travels with the
+    response so the UI can name the model, or say plainly that none ran.
+    """
     summary = AnalysisSummary(
         workloads_evaluated=len(results),
         approved=sum(r.decision is DecisionStatus.APPROVED for r in results),
@@ -217,9 +362,25 @@ def _aggregate(results: list[WorkloadResult], bundle: InputBundle, now: datetime
             sum(r.monthly_savings_estimate_usd for r in results if r.decision is DecisionStatus.APPROVED), 2),
     )
 
+    status = _status_of(llm_status)
     warnings = [DISCLAIMER]
     if bundle.policy.simulation_now:
         warnings.append(f"Demo clock fixed at {bundle.policy.simulation_now.isoformat()}.")
+    if status.get("backend") != "openai-compatible":
+        detail = status.get("detail") or "The model server was not reachable."
+        warnings.append(f"No live language model answered the agent turns. {detail}")
+    if fallbacks:
+        # Name the cause, not just the workload. "The agent cycle failed for payment-api" tells a
+        # reviewer nothing; "the model server returned HTTP 503" tells them whether to retry.
+        warnings.append(
+            "The agent cycle failed for " + _name_the_workloads(fallbacks) +
+            "; the deterministic critic decided those workloads.")
+    if degraded:
+        # A workload whose review was cut short by a model outage. It still has a verdict, but a
+        # shorter review than its neighbours, and the report has to say so.
+        warnings.append(
+            "The agent review was cut short for " + _name_the_workloads(degraded) +
+            "; the deterministic critic decided those workloads.")
 
     top_n = bundle.policy.critic.top_n_findings
     top_opportunities = [TopOpportunity(
@@ -235,7 +396,9 @@ def _aggregate(results: list[WorkloadResult], bundle: InputBundle, now: datetime
     payload: dict = dict(
         analysis_id=f"ANL-{now:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:6]}",
         generated_at=now,
-        mode="agent" if bundle.policy.simulation_now else os.getenv("DATA_SOURCE", "local"),
+        # The agent cycle is the only reasoning path now, so the response says so. The demo clock
+        # is disclosed in the warnings above rather than by hijacking this field.
+        mode="agent",
         summary=summary,
         results=results,
         warnings=warnings,
@@ -244,6 +407,9 @@ def _aggregate(results: list[WorkloadResult], bundle: InputBundle, now: datetime
         input_fingerprint="sha256:" + hashlib.sha256(bundle.model_dump_json().encode("utf-8")).hexdigest(),
         top_n_findings=top_n,
         top_opportunities=top_opportunities,
+        llm_backend=status.get("backend") or "simulated",
+        llm_model=status.get("model"),
+        llm_base_url=status.get("base_url"),
     )
     if "input_issues" in AnalysisResponse.model_fields:
         payload["input_issues"] = bundle.issues
@@ -255,25 +421,24 @@ def _aggregate(results: list[WorkloadResult], bundle: InputBundle, now: datetime
 async def run_and_record(store: Store, now: datetime | None = None, *, mode: str = "pipeline", **kwargs) -> AnalysisResponse:
     """Run the analysis with the saved policy, then persist the report + immutable decision snapshots.
 
-    `mode` selects the reasoning path:
-      "pipeline" - the deterministic optimizer + critic. Reproducible, no LLM involved.
-      "agent"    - the Proposer -> Critic -> Judge cycle. The deterministic critic still owns every
-                   final decision; the adversarial phase can only downgrade a recommendation.
+    `mode` is accepted for call-site compatibility and is IGNORED: the agent cycle is the only
+    reasoning path. The deterministic optimizer + critic remain the safety model behind every
+    final decision (the `validate_policy` tool calls them), and the adversarial phase can only
+    downgrade a recommendation - it can never approve, reject or change a number.
     """
-    if mode == "agent":
-        response, bundle = await _run_agentic_with_policy(store, now, **kwargs)
-    else:
-        response, bundle = run_analysis_with_bundle(now, policy=store.get_policy(), **kwargs)
+    response, bundle = await _run_agentic_with_policy(store, now, **kwargs)
     store.save_report(response, {r.workload_id: fingerprint(r.workload_id, bundle) for r in response.results}, bundle.policy.critic.version)
     return response
 
 
 async def _run_agentic_with_policy(store: Store, now: datetime | None = None, **kwargs) -> tuple[AnalysisResponse, InputBundle]:
     """Run the agentic cycle with the saved safety policy applied."""
-    bundle = apply_policy(default_inputs(), store.get_policy())
+    inputs_fn = kwargs.get("inputs_fn") or default_inputs
+    bundle = apply_policy(inputs_fn(), store.get_policy())
     llm_client = kwargs.get("llm_client")
+    llm_status = kwargs.get("llm_status")
     if llm_client is None:
-        from app.services.simulated_llm import SimulatedLLMClient
-        llm_client = SimulatedLLMClient()
-    response, bundle = await run_analysis_agentic(now=now, llm_client=llm_client, bundle=bundle, store=store)
+        llm_client, llm_status = resolve_llm()
+    response, bundle = await run_analysis_agentic(now=now, llm_client=llm_client, llm_status=llm_status,
+                                                  bundle=bundle, store=store)
     return response, bundle
