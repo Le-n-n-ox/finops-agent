@@ -46,6 +46,10 @@ export interface OptimizationProposal {
   priority_score?: number | null
   priority_breakdown?: PriorityBreakdown | null
   findings?: ResourceFinding[]
+  /** What the optimizer found but a safety rule refused. Zero when nothing was suppressed. */
+  suppressed_saving_usd?: number
+  /** The candidate request the optimizer proposed before the critic suppressed it. */
+  suppressed_proposal?: ResourceSettings | null
 }
 
 export interface DataQualityResult {
@@ -134,20 +138,48 @@ export interface CriticObjection {
   source?: string | null
 }
 
+/** One tool call made by the agent. */
+export interface ToolCall {
+  timestamp?: string
+  tool: string
+  params: Record<string, unknown>
+  result: unknown
+  thought?: string | null
+}
+
+/** One phase of the Proposer -> Critic -> Judge review cycle. */
+export interface ReviewCycle {
+  role: 'proposer' | 'critic' | 'judge' | string
+  summary: string
+  steps: ToolCall[]
+  objections: CriticObjection[]
+  verdict?: string | null
+  started_at?: string
+  completed_at?: string | null
+}
+
 export interface WorkloadResult {
   workload_id: string
   namespace: string
   decision: DecisionStatus
   risk_level: RiskLevel
   reason: string
-  /** Evidence-based confidence from the agent's verification pass (0-100). */
-  confidence_score?: number
+  /**
+   * Evidence-based confidence from the agent's verification pass (0-100).
+   * Null in pipeline mode, where no agent runs. The proposal's own factor-based score is
+   * `proposal.confidence.score` and is present in both modes.
+   */
+  confidence_score?: number | null
   /** One-line explanation of how confidence_score was derived. */
   confidence_basis?: string
   /** One line per tool the agent called. */
   evidence_trail?: string[]
   /** Adversarial objections raised during the Proposer -> Critic -> Judge cycle. */
   objections?: CriticObjection[]
+  /** The three review phases, in order (agent mode only). */
+  cycles?: ReviewCycle[]
+  /** Human rejections from prior reviews, injected into the proposer's prompt. */
+  historical_lessons?: string[]
   checks: CriticCheck[]
   proposal: OptimizationProposal
   monthly_savings_estimate_usd: number
@@ -250,4 +282,154 @@ export interface AuditRecord {
   rejection_reasons: string[]
   resource: string | null
   reviewer_guidance: string | null
+}
+
+// ----- dashboard / history endpoints
+
+export interface Opportunity {
+  workload_id: string
+  decision: DecisionStatus
+  potential_saving_usd: number
+  priority_score: number
+}
+
+export interface TrendPoint {
+  report_id: string
+  generated_at: string
+  approved: number
+  deferred: number
+  rejected: number
+  needs_review: number
+  no_change: number
+  savings_usd: number
+}
+
+export interface DashboardSummary {
+  has_data: boolean
+  report_id: string | null
+  generated_at: string | null
+  workloads_analyzed: number
+  approved: number
+  deferred: number
+  rejected: number
+  needs_review: number
+  no_change: number
+  /** Counted for approved decisions only. */
+  estimated_monthly_savings_usd: number
+  /** Everything the optimizer proposed, approved or not. */
+  potential_savings_usd: number
+  /** Potential minus approved: what the safety rules held back. */
+  held_back_usd: number
+  top_opportunities: Opportunity[]
+  /** Oldest -> newest. */
+  trend: TrendPoint[]
+}
+
+export interface WorkloadRow {
+  workload_id: string
+  namespace: string
+  decision: DecisionStatus
+  risk_level: string
+  cpu_request_millicores: number | null
+  proposed_cpu_request_millicores: number | null
+  memory_request_mib: number | null
+  proposed_memory_request_mib: number | null
+  potential_saving_usd: number
+  priority_score: number
+  /** 0-100: 60% sample volume vs 72h + 40% freshness vs stale_after_hours. */
+  data_quality: number
+  latest_action: ReviewAction | null
+}
+
+export interface EventRow {
+  event_id: string
+  name: string
+  start_at: string
+  end_at: string
+  services: string[]
+  expected_traffic: string
+  risk: string
+  notes: string
+}
+
+/** The editable safety policy (backend CriticPolicy). */
+export interface CriticPolicy {
+  version: string
+  rule_version: string
+  min_samples: number
+  stale_after_hours: number
+  max_reduction_pct: number
+  min_monthly_saving_usd: number
+  min_cpu_request_millicores: number
+  min_memory_request_mib: number
+  cpu_floor_p99_multiplier: number
+  memory_floor_p99_multiplier: number
+  risk_window_hours: number
+  event_freeze_hours_after: number
+  top_n_findings: number
+  change_window_start_hour: number
+  change_window_end_hour: number
+  change_window_days: number[]
+  protected_workloads: string[]
+  excluded_workloads: string[]
+  criticality_headroom: Record<string, number>
+  policy_exceptions: PolicyException[]
+}
+
+export interface PolicyException {
+  workload_id: string
+  reason: string
+  expires_at: string
+}
+
+/** Result of POST /api/simulate - a what-if, never saved, never applied. */
+export interface SimulationResult {
+  simulation: boolean
+  label: string
+  workload_id: string
+  original_decision: DecisionStatus
+  simulated: WorkloadResult
+  cpu_change_pct: number | null
+  memory_change_pct: number | null
+  estimated_monthly_saving_usd: number
+  cpu_headroom_pct: number | null
+  memory_headroom_pct: number | null
+}
+
+/** One decision in the searchable history (backend DecisionRecord). */
+export interface DecisionRecord {
+  decision_id: string
+  report_id: string
+  workload_id: string
+  namespace: string
+  decision: DecisionStatus
+  risk_level: RiskLevel
+  reason: string
+  created_at: string
+  policy_version: string
+  rule_version: string
+  input_fingerprint: string | null
+  config_hash: string
+  metrics_at: string | null
+  event_version: string
+  latest_action: ReviewAction | null
+  snapshot: WorkloadResult | null
+}
+
+export interface ExpiryResult {
+  stale: boolean
+  reasons: string[]
+  message: string
+}
+
+export interface DecisionDetail {
+  record: DecisionRecord
+  patch: { workload_id: string; yaml: string; original_yaml: string; validation: { valid: boolean; errors: string[] }; ready_for_review: boolean } | null
+  expiry: ExpiryResult | null
+  audit: AuditRecord[]
+}
+
+export interface ReportDetail {
+  report: AnalysisResponse
+  decisions: DecisionDetail[]
 }

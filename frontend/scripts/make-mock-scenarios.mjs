@@ -74,6 +74,16 @@ const spike = {
   decision: 'rejected',
   risk_level: 'high',
   reason: 'Recent usage spike: observed p99 now exceeds the proposed request. Keeping current allocation.',
+  confidence_score: 52,
+  confidence_basis: '100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics; 1 blocking objection(s).',
+  objections: [
+    {
+      code: 'PROPOSED_BELOW_P99',
+      severity: 'blocking',
+      message: 'Proposed 900 m CPU is below observed p99 (1480 m) after the last-6h spike.',
+      source: 'get_workload_metrics',
+    },
+  ],
   monthly_savings_estimate_usd: 0,
   yaml_patch: null,
   checks: [
@@ -98,6 +108,45 @@ spike.usage_series = series(
   { ...spike, proposal: { ...spike.proposal, metrics: { ...spike.proposal.metrics, cpu_p99: 450, memory_p99: 2600 } } },
   { spikeTail: 6, spikePeak: { cpu: 1480, mem: 6900 } },
 )
+// The spike workload is derived from payment-api, so it inherits its review cycle. Rewrite it
+// rather than shipping a cycle that names a different service: a cycle that talks about
+// payment-api while the card is about cart-service is worse than no cycle at all.
+spike.cycles = [
+  {
+    ...spikeSrc.cycles[0],
+    summary: 'Pulled 72 hourly samples. Average usage sits far below the request, so the proposal targets p99 x 1.2 — but the last 6 hours climb sharply.',
+    steps: spikeSrc.cycles[0].steps.map((st) => ({ ...st, params: { workload_id: 'cart-service' } })),
+  },
+  {
+    ...spikeSrc.cycles[1],
+    summary: 'Red-teamed the proposal and found a blocking objection: observed p99 over the last 6 hours is 1480 m CPU, above the 900 m the proposal would request. A reduction now would throttle the service during its busiest hours.',
+    objections: [
+      {
+        code: 'PROPOSED_BELOW_P99',
+        severity: 'blocking',
+        message: 'Proposed 900 m CPU is below observed p99 (1480 m) after the last-6h spike.',
+        source: 'get_workload_metrics',
+      },
+    ],
+    verdict: 'escalate',
+    steps: spikeSrc.cycles[1].steps.map((st) => ({ ...st, params: { workload_id: 'cart-service' } })),
+  },
+  {
+    ...spikeSrc.cycles[2],
+    summary: 'The objection is blocking and the deterministic critic rejected the change, so the current allocation is kept.',
+    objections: [
+      {
+        code: 'PROPOSED_BELOW_P99',
+        severity: 'blocking',
+        message: 'Proposed 900 m CPU is below observed p99 (1480 m) after the last-6h spike.',
+        source: 'get_workload_metrics',
+      },
+    ],
+    verdict: 'rejected',
+    steps: spikeSrc.cycles[2].steps.map((st) => ({ ...st, params: { workload_id: 'cart-service' } })),
+  },
+]
+spike.historical_lessons = []
 
 const SCENARIOS = [
   { id: 'all', label: 'All workloads', description: 'Mixed demo set' },

@@ -109,6 +109,37 @@ Confidence is a deterministic weighted score: validation 20%, sample sufficiency
 
 Incident matches are exact-workload matches. A namespace match is labelled `direct`; missing or different namespace is labelled `indirect`. Empty or irrelevant incident history yields no fabricated evidence and adds a warning. Currency savings are produced only when both CPU and memory rates are configured. Without both rates, the proposal reports relative request-allocation reductions and leaves USD savings unset. All monetary figures scale by replicas and the requested number of days from a 30-day month.
 
+## Frontend
+
+`frontend/` is a React + TypeScript + Vite application. The backend exposes the analysis; the
+frontend makes it reviewable. The panels that carry the agent's work:
+
+| Panel | What it shows | Endpoint |
+|---|---|---|
+| **Cycle** tab (detail panel) | The Proposer → Critic → Judge phases as they ran: each phase's summary, the tools it called, the objections it raised, and the Judge's ruling. | `POST /api/analyze` (`mode: "agent"`) |
+| **What-if simulator** | Move the CPU/memory request sliders and the deterministic critic re-decides against your numbers. Nothing is saved and no patch is produced. | `POST /api/simulate` |
+| **Review history** | What a human already decided about this workload, with the structured rejection reasons — the exact text the agent replays as "Historical Lessons" next time. | `GET /api/reports/{id}`, `GET /api/decisions` |
+| **Decision history** (History tab) | Every decision the critic has made, across reports, with a search box, a status filter, and a validity column. A decision whose metrics have moved since it was made is marked stale — and the backend refuses to accept a stale decision for implementation. | `GET /api/decisions`, `GET /api/reports/{id}` |
+| **Trend across analyses** | Approved savings over successive runs, with deferred and needs-review counts on the second axis. | `GET /api/dashboard/summary` |
+| **Business events** | Campaigns and freezes split into live / upcoming / past, with the services each one puts at risk. | `GET /api/events` |
+| **Safety policy** | The critic's guardrails, editable — every field the critic reads, not a selection. Saving appends a new policy version and flags earlier reports as expired. | `GET`/`PUT /api/policies`, `GET /api/policies/defaults` |
+| **Savings potential** | Everything the optimizer found, how much survived the safety rules, and what was held back. A deferral is shown with its price, not as a gap in the output. | `POST /api/analyze` |
+| **Top opportunities** | Findings ranked by savings × confidence ÷ risk, so the short list is at the top rather than buried. | `GET /api/dashboard/summary` |
+
+A **provenance strip** sits above the analysis: the policy version, the rule version, the input
+fingerprint and the run id, so a recommendation can be traced to the rules and the data that
+produced it. In agent mode it also says plainly that the cycle is driven by a deterministic
+stand-in, not a live language model.
+
+The header has a **Pipeline / Agent cycle** toggle. The workflow strip changes with it, so the
+stages shown are the ones that actually produced the numbers on screen. The export button writes
+the report you are looking at — same `analysis_id`, same decisions — not a fresh run.
+
+Printing is a first-class path: the detail panel's tabs are all mounted, so a printed report
+contains the evidence, the review cycle, the critic's checks and the patch, not only whichever tab
+happened to be open. The print stylesheet forces the light palette, so a report printed from a
+dark-mode screen is not white text on white paper.
+
 ## Demo data
 
 The `data/` directory contains synthetic fixture inputs: `deployments.yaml`, `usage_history.csv`, `business_events.json`, `incident_history.csv`, `policy.yaml`, and `cost_model.json`. The policy includes a fixed `simulation_now` so the demo scenarios and freshness decisions are repeatable. `data/sample_analysis_response.json` is a sample output. These fixtures demonstrate outcomes; they are not live production telemetry.

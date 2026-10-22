@@ -355,6 +355,8 @@ class AgentOrchestrator:
             "confidence_basis": basis,
             "evidence_trail": audit_log.evidence_trail,
             "objections": critic.objections,
+            "cycles": audit_log.cycles,
+            "historical_lessons": audit_log.historical_lessons,
         })
 
         if not blocking or result.decision is not DecisionStatus.APPROVED:

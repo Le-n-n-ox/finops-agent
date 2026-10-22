@@ -31,6 +31,7 @@ from app.services.fingerprints import fingerprint
 from app.services.report_service import with_patch
 from app.services.store import Store
 from app.services.agent_orchestrator import AgentOrchestrator
+from app.services.validation_service import validation_from_bundle
 
 DISCLAIMER = "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
 
@@ -134,6 +135,11 @@ def run_analysis_with_bundle(
     )
     if "input_issues" in AnalysisResponse.model_fields:
         payload["input_issues"] = bundle.issues
+    if "data_health" in AnalysisResponse.model_fields:
+        # The same validation the /api/validation endpoint returns, computed from the bundle that
+        # produced this analysis. The UI shows metric completeness and freshness per workload, so
+        # a reviewer can see which recommendations rest on thin data.
+        payload["data_health"] = validation_from_bundle(bundle)
     return AnalysisResponse(**payload), bundle
 
 
@@ -181,15 +187,18 @@ async def run_analysis_agentic(
             res, audit = await orchestrator.analyze_workload_agentic(spec.name)
             audits.append(audit)
             # Attach the validated patch exactly as the deterministic pipeline does.
-            results.append(with_patch(res, specs.get(spec.name)))
+            patched = with_patch(res, specs.get(spec.name))
         except Exception:  # noqa: BLE001 - one bad workload must not sink the whole analysis
             # Fail-safe: if the agent crashes, fallback to the deterministic pipeline for this workload
             from app.services.optimizer_service import analyze_workload
             prop = analyze_workload(spec, [r for r in bundle.usage_rows if r.service == spec.name],
                                     bundle.policy.optimizer, now, bundle.cost_model,
                                     incidents=bundle.incidents, events=bundle.events)
-            res = evaluate(prop, bundle, now)
-            results.append(with_patch(res, specs.get(spec.name)))
+            patched = with_patch(evaluate(prop, bundle, now), specs.get(spec.name))
+        # The usage chart and event band are UI-only fields. The agent path must attach them too,
+        # or "Agent cycle" mode renders an empty chart where the pipeline shows 720 points.
+        extra = _chart_data(spec.name, bundle, now)
+        results.append(patched.model_copy(update=extra) if extra else patched)
 
     results.sort(key=lambda result: -(result.proposal.priority_score or 0.0))
     return _aggregate(results, bundle, now), bundle
@@ -238,6 +247,8 @@ def _aggregate(results: list[WorkloadResult], bundle: InputBundle, now: datetime
     )
     if "input_issues" in AnalysisResponse.model_fields:
         payload["input_issues"] = bundle.issues
+    if "data_health" in AnalysisResponse.model_fields:
+        payload["data_health"] = validation_from_bundle(bundle)
     return AnalysisResponse(**payload)
 
 
