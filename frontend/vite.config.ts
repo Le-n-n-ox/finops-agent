@@ -32,5 +32,19 @@ export default defineConfig({
         secure: false,
       }
     }
+  },
+  // `vite preview` serves the built output, and it is what the container runs - the image
+  // bakes the source in, so a dev server in the container has nothing to hot-reload. It needs
+  // the same /api proxy, because the browser still calls the backend for everything.
+  preview: {
+    host: '127.0.0.1',
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: apiTarget,
+        changeOrigin: true,
+        secure: false,
+      }
+    }
   }
 });

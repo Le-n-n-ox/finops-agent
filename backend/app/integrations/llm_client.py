@@ -127,8 +127,18 @@ class LLMUnavailable(RuntimeError):
 # same request usually succeeds a moment later. Giving up on the first one costs a whole
 # workload its review cycle, so transient failures are retried a bounded number of times with a
 # growing pause. A refusal (4xx) is not transient and is never retried.
-TRANSIENT_RETRY_ATTEMPTS = 3
-TRANSIENT_RETRY_BACKOFF_SECONDS = 2.0
+#
+# The patience here is deliberate. The model server is a single local runtime, and a full
+# analysis is a long series of back-to-back requests against it - so the server is exactly
+# busiest when the app is talking to it most. A dropped connection or a 502 in the middle of
+# that is usually a queue backing up, not a server that is down, and the next request a few
+# seconds later is usually fine. Giving up after a few seconds of patience cut a third of the
+# reviews short, for no reason that had anything to do with the workload.
+#
+# It is still bounded: a server that is genuinely gone is reported in about half a minute, and
+# the phase ends with the evidence it had rather than hanging.
+TRANSIENT_RETRY_ATTEMPTS = 4
+TRANSIENT_RETRY_BACKOFF_SECONDS = 3.0
 
 
 # ---------------------------------------------------------------------- tool schema
