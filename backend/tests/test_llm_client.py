@@ -313,6 +313,34 @@ class TestTransientFailuresAreRetried:
         assert "503" in str(caught.value)
         assert len(calls) == llm_client.TRANSIENT_RETRY_ATTEMPTS
 
+    def test_a_busy_server_is_hidden_out(self, monkeypatch):
+        """The model server is busiest exactly when the app is talking to it most.
+
+        A full analysis is a long series of back-to-back requests against a single local
+        runtime, so a dropped connection or a 502 in the middle of one is usually a queue
+        backing up rather than a server that is down - and the next request a few seconds
+        later is usually fine. Giving up too quickly cut a third of the reviews short, for
+        no reason that had anything to do with the workload.
+        """
+        calls = self._patch_post(monkeypatch, [
+            _FakeResponse(502, {"error": "upstream unavailable"}),
+            _FakeResponse(502, {"error": "upstream unavailable"}),
+            _FakeResponse(200, {"choices": [{"message": {"content": "hello"}}]}),
+        ])
+
+        client = self._client()
+        answer = asyncio.run(client.chat("s", "u", [], []))
+
+        assert answer["content"] == "hello"
+        assert len(calls) == 3, "the client gave up on a server that was only briefly busy"
+
+    def test_the_patience_is_bounded(self):
+        """A server that is genuinely gone has to be reported, not waited on forever."""
+        total_wait = sum(llm_client.TRANSIENT_RETRY_BACKOFF_SECONDS * (attempt + 1)
+                         for attempt in range(llm_client.TRANSIENT_RETRY_ATTEMPTS - 1))
+        assert total_wait <= 30, f"the client would wait {total_wait:.0f}s before giving up"
+        assert llm_client.TRANSIENT_RETRY_ATTEMPTS >= 4, "the client is not patient enough"
+
 
 class TestTheCredentialNeverReachesAnErrorMessage:
     """An error message can end up in the API response, so it must be scrubbed.

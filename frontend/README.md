@@ -19,6 +19,15 @@ The dev server proxies `/api` to `http://127.0.0.1:8000` (see `vite.config.ts`).
 Start the backend first with `uvicorn app.main:app --reload --port 8000 --app-dir backend` from the
 repository root.
 
+The container does **not** run that dev server. `frontend/Dockerfile` builds the app and serves
+the built output with `vite preview`, which proxies `/api` the same way. The image bakes the
+source in, so a dev server inside it would have nothing to hot-reload — the only way to see a
+change is to rebuild the image — and it costs about 650 MB of memory for the privilege. The
+built output is what a reviewer should be looking at anyway: it is the bundle that ships.
+
+For day-to-day work, run `npm run dev` on the host: it hot-reloads, and it is where the
+editing happens.
+
 ## Pages
 
 The dashboard is split into five routed pages, so a reviewer opens the section they need instead of
