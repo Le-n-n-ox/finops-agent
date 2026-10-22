@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import hashlib
 import logging
-import re
+import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Any, Dict
@@ -35,6 +35,7 @@ from app.models.schemas import (
 )
 from app.services.critic_service import evaluate
 from app.services.fingerprints import fingerprint
+from app.services.redaction import scrub as _scrub
 from app.services.report_service import with_patch
 from app.services.store import Store
 from app.services.agent_orchestrator import AgentOrchestrator, deterministic_result
@@ -43,22 +44,6 @@ from app.services.validation_service import validation_from_bundle
 logger = logging.getLogger(__name__)
 
 DISCLAIMER = "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
-
-# Anything that looks like a credential in a message that is about to be published. The client
-# already scrubs its own token; this catches a third-party error that echoes a header. The
-# patterns are applied in order, so the value is removed before the label that introduces it.
-_SECRET_PATTERNS = (
-    re.compile(r"(?i)\bbearer\s+\S+"),
-    re.compile(r"(?i)\bauthorization[:=]\s*\S+"),
-    re.compile(r"(?i)\b(?:api[_-]?key|token|secret|password)[:=]\s*\S+"),
-)
-
-
-def _scrub(text: str) -> str:
-    """Strip anything that looks like a credential out of a message bound for the response."""
-    for pattern in _SECRET_PATTERNS:
-        text = pattern.sub("[REDACTED]", text)
-    return text
 
 
 def _name_the_workloads(affected: dict[str, str], limit: int = 3) -> str:
@@ -143,7 +128,12 @@ def resolve_llm() -> tuple[Any, Dict[str, Any]]:
         client, status = resolved
     else:  # a client without a status: derive one so the response can still be honest
         client, status = resolved, None
-    return client, _status_of(status) or _status_from_client(client)
+    if status:
+        return client, _status_of(status)
+    # A client that carries no status of its own: derive one. Without this the response would
+    # publish a blank backend, and "we do not know which reasoner ran" would read as
+    # "the deterministic stand-in ran".
+    return client, _status_from_client(client)
 
 
 def llm_status_payload() -> Dict[str, Any]:
@@ -328,8 +318,12 @@ async def run_analysis_agentic(
             # Fail-safe: if the agent crashes, fallback to the deterministic pipeline for this
             # workload. The cause is logged and published: a silent fallback reads like a review
             # that happened, and a reviewer has to be able to tell the difference.
-            logger.exception("The agent cycle failed for %s; the deterministic critic decided it.",
-                             spec.name)
+            #
+            # The traceback is scrubbed before it is logged. The exception's message can carry a
+            # header the server echoed back, and a log file is read by people who should not be
+            # holding a token.
+            logger.error("The agent cycle failed for %s; the deterministic critic decided it.\n%s",
+                         spec.name, _scrub(traceback.format_exc()))
             patched = with_patch(deterministic_result(bundle, spec.name, now), specs.get(spec.name))
             fallbacks[spec.name] = _short_reason(exc)
         # The usage chart and event band are UI-only fields. The agent path must attach them too,
@@ -418,7 +412,7 @@ def _aggregate(results: list[WorkloadResult], bundle: InputBundle, now: datetime
     return AnalysisResponse(**payload)
 
 
-async def run_and_record(store: Store, now: datetime | None = None, *, mode: str = "pipeline", **kwargs) -> AnalysisResponse:
+async def run_and_record(store: Store, now: datetime | None = None, *, mode: str = "agent", **kwargs) -> AnalysisResponse:
     """Run the analysis with the saved policy, then persist the report + immutable decision snapshots.
 
     `mode` is accepted for call-site compatibility and is IGNORED: the agent cycle is the only

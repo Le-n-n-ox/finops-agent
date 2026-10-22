@@ -67,11 +67,6 @@ _JSON_TYPES = {
     "array": "array",
 }
 
-# How much of a tool result goes into the prompt. `get_workload_metrics` returns 720 usage rows;
-# sending all of it, on every turn, for every workload, is slow and mostly noise. The audit log
-# keeps the complete result either way - this only bounds what the model reads.
-MAX_TOOL_RESULT_CHARS = 20_000
-
 # Which reasoner to use, chosen by configuration.
 #
 #   auto      - probe for a model server; fall back to the deterministic stand-in when none
@@ -358,12 +353,29 @@ class OpenAICompatClient:
         body = self._body(system, user, tools, history)
         payload = await self._post("/chat/completions", body)
 
-        choices = payload.get("choices") or []
-        if not choices:
+        # A 200 is not a guarantee of a well-formed body. A server that answers with a list, or
+        # with a choice that is not an object, must be reported as an outage - not as a raw
+        # AttributeError, which would slip past the outage handling and leave the workload
+        # looking like it was never reviewed.
+        if not isinstance(payload, dict):
+            raise LLMUnavailable(
+                f"The model server at {self.config.base_url} returned a response that is not a JSON object."
+            )
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
             raise LLMUnavailable(
                 f"The model server at {self.config.base_url} returned no choices."
             )
-        message = choices[0].get("message") or {}
+        first = choices[0]
+        if not isinstance(first, dict):
+            raise LLMUnavailable(
+                f"The model server at {self.config.base_url} returned a malformed choice."
+            )
+        message = first.get("message")
+        if not isinstance(message, dict):
+            raise LLMUnavailable(
+                f"The model server at {self.config.base_url} returned a malformed message."
+            )
         return self._parse(message)
 
     async def probe(self) -> bool:
@@ -388,9 +400,12 @@ class OpenAICompatClient:
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.post(self._url(path), headers=self._headers(), json=body)
-                    if response.status_code == 400 and self._has_optional_params(body):
+                    if response.status_code == 400 and self._blames_optional_params(response):
                         # Some models reject `temperature`/`max_tokens` outright. The request is
-                        # otherwise valid, so retry it with the bare minimum rather than fail the cycle.
+                        # otherwise valid, so retry it with the bare minimum rather than fail the
+                        # cycle. Only when the server says so: a 400 caused by anything else -
+                        # an unknown model id, a tool schema it rejects - is not fixed by dropping
+                        # those two fields, and retrying it anyway only doubles the wait.
                         minimal = {key: body[key] for key in ("model", "messages", "tools") if key in body}
                         response = await client.post(self._url(path), headers=self._headers(), json=minimal)
                     if response.status_code >= 500:
@@ -422,8 +437,18 @@ class OpenAICompatClient:
         ))
 
     @staticmethod
-    def _has_optional_params(body: Dict[str, Any]) -> bool:
-        return "temperature" in body or "max_tokens" in body
+    def _blames_optional_params(response: httpx.Response) -> bool:
+        """Whether a 400 points at `temperature` or `max_tokens`.
+
+        That is the only case the minimal retry can fix. Everything else - an unknown model
+        id, a tool schema the server rejects - is the server's considered answer, and the
+        request is not going to succeed with two fewer fields.
+        """
+        try:
+            detail = response.text.lower()
+        except Exception:  # noqa: BLE001 - a body we cannot read is not evidence either way
+            return False
+        return "temperature" in detail or "max_tokens" in detail or "max tokens" in detail
 
     def _parse(self, message: Dict[str, Any]) -> LLMResponse:
         """Turn one assistant message into an `LLMResponse`."""
