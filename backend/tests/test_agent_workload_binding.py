@@ -130,6 +130,36 @@ class TestTheModelCannotChooseTheProposal:
         assert any(s.tool == "validate_policy" for s in audit.steps)
         assert result.decision is not DecisionStatus.NEEDS_REVIEW
 
+    def test_a_failed_policy_check_does_not_end_the_phase(self, bundle):
+        """A policy check that produced no verdict must not end the phase.
+
+        The proposer stops once the deterministic verdict is in hand, because the proposal
+        cannot change after that. A policy check that *failed* holds no verdict - and the
+        model's next move is usually to correct what it got wrong. Treating the failure as a
+        verdict ended the phase before the correction could run, and the workload was left
+        with no verdict at all.
+        """
+        client = ScriptedClient([
+            {"tool_call": _tool("analyze_rightsizing", workload_id="queue-cleaner")},
+            {"tool_call": _tool("validate_policy")},
+            {"tool_call": _tool("analyze_rightsizing", workload_id="payment-api")},
+            {"tool_call": _tool("validate_policy")},
+            {"content": "done", "conclusion": True},
+        ])
+        orchestrator = AgentOrchestrator(bundle, client)
+        result, audit = asyncio.run(orchestrator.analyze_workload_agentic("payment-api"))
+
+        # The correction ran, and the policy check after it produced the verdict.
+        tools = [s.tool for s in audit.steps]
+        assert tools.count("analyze_rightsizing") == 2, f"the correction never ran: {tools}"
+        verdicts = [s for s in audit.steps
+                    if s.tool == "validate_policy" and getattr(s.result, "workload_id", None)]
+        assert verdicts, f"no policy verdict was produced: {tools}"
+        assert verdicts[-1].result.workload_id == "payment-api"
+        assert result.proposal.workload_id == "payment-api"
+        assert result.decision is not DecisionStatus.NEEDS_REVIEW, \
+            "the workload was left without a verdict"
+
     def test_each_workload_gets_its_own_verdict(self, bundle):
         """Two reviews in a row must not share a toolbox's history."""
         client = ScriptedClient([

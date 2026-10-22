@@ -348,7 +348,12 @@ class AgentOrchestrator:
             current_context, step = self._handle_response(response, cycle, audit_log, current_context)
             self._record_turn(messages, response, step)
 
-            if step is not None and step.tool == "validate_policy" and len(cycle.steps) > before:
+            if (step is not None and step.tool == "validate_policy"
+                    and isinstance(step.result, WorkloadResult) and len(cycle.steps) > before):
+                # Only a policy check that actually produced a verdict counts. A failed one -
+                # the tool was called with a proposal that could not be validated, or with the
+                # wrong workload - holds no verdict, and treating it as one ended the phase
+                # before the model could act on the error and try again.
                 validated = True
                 # The content that came with the verdict is the model's case for the change.
                 case = response["content"] or case
@@ -394,6 +399,23 @@ class AgentOrchestrator:
             f"Adversarially review the proposed change for workload: {workload_id}.\n"
             f"Proposer summary: {proposer.summary or '(none)'}\n"
             f"Tools already called: {', '.join(step.tool for step in proposer.steps) or '(none)'}."
+        )
+        # The evidence the objections are grounded in is gathered here, not left to the model.
+        #
+        # The log-pressure objection is a blocking one: reducing a container that is already
+        # being OOMKilled is a reliability regression, not a saving. If it depended on the
+        # model choosing to call `search_logs`, the model could suppress it by not calling -
+        # and the deterministic critic has no log rule of its own to fall back on, so the
+        # workload would be approved on the strength of an omission. The evidence is the same
+        # either way, so it is retrieved every time and the model's objections are built on
+        # top of it.
+        for tool_name in ("search_logs", "get_dependencies"):
+            step = self._run_tool(tool_name, {"workload_id": workload_id}, None)
+            cycle.steps.append(step)
+            audit_log.steps.append(step)
+        current_context += (
+            "\nThe container logs and the dependency map for this workload have already been "
+            "retrieved and are in the evidence trail. Use them; do not fetch them again."
         )
         messages: List[Dict[str, Any]] = []
 

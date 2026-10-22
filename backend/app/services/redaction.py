@@ -13,10 +13,20 @@ from __future__ import annotations
 import re
 
 # Anything that looks like a credential in a message that is about to be published.
+#
+# The credential name may be prefixed - `access_token`, `client_secret`, `db_password` - and a
+# prefix ends in a word character, so the name cannot be anchored with a word boundary or the
+# prefix is missed and the value survives. The name is therefore matched as "a run of word
+# characters ending in token/secret/password", which lets the prefix through.
+#
+# A `name: value` shape is redacted whatever the value looks like. This scrubs failure causes
+# and log lines, not prose, and a scrubber that guesses "this value is not secret" is a
+# scrubber that leaks the next time it guesses wrong.
 SECRET_PATTERNS = (
-    re.compile(r"(?i)\bbearer\s+\S+"),
+    # `Bearer <value>`, but not the ordinary phrase "bearer token".
+    re.compile(r"(?i)\bbearer\s+(?!token\s|secret\s|password\s|credential\s)\S+"),
     re.compile(r"(?i)\bauthorization[:=]\s*\S+"),
-    re.compile(r"(?i)\b(?:api[_-]?key|token|secret|password)[:=]\s*\S+"),
+    re.compile(r"(?i)\b[a-z0-9_-]*(?:api[_-]?key|token|secret|password|credential)[:=]\s*\S+"),
 )
 
 
