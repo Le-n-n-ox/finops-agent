@@ -67,6 +67,12 @@ Two tools support the cycle beyond the usual workload metrics:
 - **`search_logs`** returns simulated container logs for a workload, including `OOMKilled`, CPU throttling, and eviction entries. A log that reports memory pressure raises a blocking objection against reducing the memory request.
 - **`get_dependencies`** maps the upstream services a workload depends on, so an incident on an upstream dependency is visible rather than a surprise.
 
+The model chooses which tool to call, so the tools are bound to the workload under review: every
+workload-scoped tool refuses another workload's id and says which one to use. The model
+therefore cannot choose *which* proposal the safety check judges, and a verdict about another
+workload is never published under this one's name. The proposal judged is always the one the
+deterministic optimizer produced — a copy the model echoes back is accepted and ignored.
+
 ### Confidence score
 
 `WorkloadResult.confidence_score` (0–100) and its one-line derivation `confidence_basis` are computed in `backend/app/services/verification_service.py`:
