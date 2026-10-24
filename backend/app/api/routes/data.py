@@ -89,28 +89,33 @@ def _quality(r: WorkloadResult, now: datetime, stale_after: int) -> int:
 @router.get("/dashboard/summary", response_model=DashboardSummary)
 def dashboard(svc: Services = Depends(get_services)) -> DashboardSummary:
     with api_errors():
-        reports = svc.store.list_reports(20)
+        # Summaries, not reports: validating twenty 1.5 MB payloads cost ~840 ms on every page
+        # open, and the dashboard reads six counters out of each of them.
+        reports = svc.store.report_summaries(20)
         if not reports:
             return DashboardSummary(has_data=False)
-        latest, s = reports[0], reports[0].summary
+        latest = reports[0]
         # Potential counts what the optimizer found, including the savings the critic suppressed.
         # Leaving those out would report that the safety rules cost nothing.
-        potential = round(sum(r.proposal.estimated_monthly_saving_usd + r.proposal.suppressed_saving_usd
-                              for r in latest.results), 2)
-        top_n = latest.top_n_findings or (svc.store.get_policy() or CriticPolicy()).top_n_findings
-        top = sorted(latest.results, key=lambda r: r.proposal.priority_score or 0.0, reverse=True)[:top_n]
+        potential = round(sum(w["potential_saving_usd"] for w in latest["workloads"]), 2)
+        top_n = latest.get("top_n_findings") or (svc.store.get_policy() or CriticPolicy()).top_n_findings
+        top = sorted(latest["workloads"], key=lambda w: w["priority_score"], reverse=True)[:top_n]
+        estimated = latest["estimated_monthly_savings_usd"]
         return DashboardSummary(
-            has_data=True, report_id=latest.analysis_id, generated_at=latest.generated_at, workloads_analyzed=s.workloads_evaluated,
-            approved=s.approved, deferred=s.deferred, rejected=s.rejected, needs_review=s.needs_review, no_change=s.no_change,
-            estimated_monthly_savings_usd=s.estimated_monthly_savings_usd, potential_savings_usd=potential,
-            held_back_usd=round(potential - s.estimated_monthly_savings_usd, 2),
-            top_opportunities=[Opportunity(workload_id=r.workload_id, decision=r.decision,
-                                           potential_saving_usd=round(r.proposal.estimated_monthly_saving_usd
-                                                                      + r.proposal.suppressed_saving_usd, 2),
-                                           priority_score=r.proposal.priority_score or 0.0) for r in top],
-            trend=[TrendPoint(report_id=r.analysis_id, generated_at=r.generated_at, approved=r.summary.approved,
-                              deferred=r.summary.deferred, rejected=r.summary.rejected, needs_review=r.summary.needs_review,
-                              no_change=r.summary.no_change, savings_usd=r.summary.estimated_monthly_savings_usd)
+            has_data=True, report_id=latest["analysis_id"], generated_at=latest["generated_at"],
+            workloads_analyzed=latest["workloads_evaluated"],
+            approved=latest["approved"], deferred=latest["deferred"], rejected=latest["rejected"],
+            needs_review=latest["needs_review"], no_change=latest["no_change"],
+            estimated_monthly_savings_usd=estimated, potential_savings_usd=potential,
+            held_back_usd=round(potential - estimated, 2),
+            top_opportunities=[Opportunity(
+                workload_id=w["workload_id"], decision=DecisionStatus(w["decision"]),
+                potential_saving_usd=w["potential_saving_usd"],
+                priority_score=w["priority_score"]) for w in top],
+            trend=[TrendPoint(report_id=r["analysis_id"], generated_at=r["generated_at"],
+                              approved=r["approved"], deferred=r["deferred"], rejected=r["rejected"],
+                              needs_review=r["needs_review"], no_change=r["no_change"],
+                              savings_usd=r["estimated_monthly_savings_usd"])
                    for r in reversed(reports)])
 
 

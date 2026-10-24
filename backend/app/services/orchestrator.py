@@ -11,6 +11,7 @@ but they are no longer a selectable alternative to the agent cycle.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import hashlib
 import logging
@@ -272,6 +273,20 @@ async def run_analysis(now: datetime | None = None, **kwargs) -> AnalysisRespons
     return response
 
 
+def _workload_concurrency(workloads: int) -> int:
+    """How many workload reviews may be in flight at once.
+
+    The model server is the bottleneck here, not this process: a few turns in flight hides most
+    of the round-trip time, while too many just queues requests behind the server's own limit and
+    trades latency for timeouts. `FINOPS_WORKLOAD_CONCURRENCY=1` restores one-at-a-time behaviour.
+    """
+    try:
+        configured = int(os.getenv("FINOPS_WORKLOAD_CONCURRENCY", "4"))
+    except ValueError:
+        configured = 4
+    return max(1, min(configured, max(1, workloads)))
+
+
 async def run_analysis_agentic(
     now: datetime | None = None,
     llm_client: Any = None,
@@ -303,47 +318,63 @@ async def run_analysis_agentic(
     elif llm_status is None:
         llm_status = _status_from_client(llm_client)
 
-    orchestrator = AgentOrchestrator(bundle, llm_client, store=kwargs.get("store"))
     specs = {spec.name: spec for spec in bundle.services}
     results: list[WorkloadResult] = []
-    audits: list[AgentAuditLog] = []
+    audits: list[AgentAuditLog | None] = [None] * len(bundle.services)
     fallbacks: dict[str, str] = {}
     degraded: dict[str, str] = {}
 
-    for spec in bundle.services:
-        try:
-            res, audit = await orchestrator.analyze_workload_agentic(spec.name)
-            audits.append(audit)
-            # Attach the validated patch exactly as the deterministic pipeline does.
-            patched = with_patch(res, specs.get(spec.name))
-            if orchestrator.model_outage:
-                # The model server went away mid-review. The cycle still produced a verdict, but
-                # it is a shorter review than the others, and the report has to say so.
-                degraded[spec.name] = _scrub(orchestrator.model_outage)
-        except Exception as exc:  # noqa: BLE001 - one bad workload must not sink the whole analysis
-            # Fail-safe: if the agent crashes, fallback to the deterministic pipeline for this
-            # workload. The cause is logged and published: a silent fallback reads like a review
-            # that happened, and a reviewer has to be able to tell the difference.
-            #
-            # The traceback is scrubbed before it is logged. The exception's message can carry a
-            # header the server echoed back, and a log file is read by people who should not be
-            # holding a token.
-            logger.error("The agent cycle failed for %s; the deterministic critic decided it.\n%s",
-                         spec.name, _scrub(traceback.format_exc()))
-            patched = with_patch(deterministic_result(bundle, spec.name, now), specs.get(spec.name))
-            fallbacks[spec.name] = _short_reason(exc)
-        # The usage chart and event band are UI-only fields. The agent path must attach them too,
-        # or "Agent cycle" mode renders an empty chart where the pipeline shows 720 points.
-        extra = _chart_data(spec.name, bundle, now)
-        finished = patched.model_copy(update=extra) if extra else patched
-        results.append(finished)
-        if on_workload is not None:
-            # Reported as it is finished, so a caller can show the run progressing. A failure
-            # here must not sink the analysis: the progress callback is a convenience.
+    # One workload's review is a long conversation with the model server (up to ten proposer
+    # turns, then the critic and the judge). The workloads share nothing but read-only inputs,
+    # so running them in turn made the whole analysis pay every workload's latency one after
+    # another. They now run side by side, bounded, because the model server is the scarce
+    # resource and unbounded fan-out would just queue requests behind its own limit.
+    #
+    # Each review gets its own AgentOrchestrator: that object carries per-workload state - the
+    # toolbox bound to one workload, and the model-outage flag - and two reviews sharing one
+    # would let a workload validate another workload's proposal. The client is shared, and it
+    # is safe to share: httpx pools connections and every request is independent.
+    limit = asyncio.Semaphore(_workload_concurrency(len(bundle.services)))
+
+    async def review(index: int, spec) -> None:
+        async with limit:
+            agent = AgentOrchestrator(bundle, llm_client, store=kwargs.get("store"))
             try:
-                on_workload(finished)
-            except Exception:  # noqa: BLE001 - a broken progress callback is not a broken analysis
-                logger.warning("The progress callback failed for %s.", spec.name, exc_info=True)
+                res, audit = await agent.analyze_workload_agentic(spec.name)
+                audits[index] = audit
+                # Attach the validated patch exactly as the deterministic pipeline does.
+                patched = with_patch(res, specs.get(spec.name))
+                if agent.model_outage:
+                    # The model server went away mid-review. The cycle still produced a verdict, but
+                    # it is a shorter review than the others, and the report has to say so.
+                    degraded[spec.name] = _scrub(agent.model_outage)
+            except Exception as exc:  # noqa: BLE001 - one bad workload must not sink the whole analysis
+                # Fail-safe: if the agent crashes, fallback to the deterministic pipeline for this
+                # workload. The cause is logged and published: a silent fallback reads like a review
+                # that happened, and a reviewer has to be able to tell the difference.
+                #
+                # The traceback is scrubbed before it is logged. The exception's message can carry a
+                # header the server echoed back, and a log file is read by people who should not be
+                # holding a token.
+                logger.error("The agent cycle failed for %s; the deterministic critic decided it.\n%s",
+                             spec.name, _scrub(traceback.format_exc()))
+                patched = with_patch(deterministic_result(bundle, spec.name, now), specs.get(spec.name))
+                fallbacks[spec.name] = _short_reason(exc)
+            # The usage chart and event band are UI-only fields. The agent path must attach them too,
+            # or "Agent cycle" mode renders an empty chart where the pipeline shows 720 points.
+            extra = _chart_data(spec.name, bundle, now)
+            finished = patched.model_copy(update=extra) if extra else patched
+            results.append(finished)
+            if on_workload is not None:
+                # Reported as it is finished, so a caller can show the run progressing. A failure
+                # here must not sink the analysis: the progress callback is a convenience.
+                try:
+                    on_workload(finished)
+                except Exception:  # noqa: BLE001 - a broken progress callback is not a broken analysis
+                    logger.warning("The progress callback failed for %s.", spec.name, exc_info=True)
+
+    await asyncio.gather(*(review(index, spec) for index, spec in enumerate(bundle.services)))
+    audits = [audit for audit in audits if audit is not None]
 
     results.sort(key=lambda result: -(result.proposal.priority_score or 0.0))
     return _aggregate(results, bundle, now, llm_status=llm_status, fallbacks=fallbacks,

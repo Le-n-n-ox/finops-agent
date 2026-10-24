@@ -1,4 +1,4 @@
-﻿import type {
+import type {
   AnalysisResponse,
   AuditRecord,
   CriticPolicy,
@@ -62,6 +62,29 @@ const READ_TIMEOUT_MS = 20_000
 
 const isTimeout = (e: unknown) =>
   e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')
+
+/**
+ * The last completed review, or null when none has been run yet.
+ *
+ * A full review is minutes of model time, so opening the workspace should not have to pay for it
+ * again. The caller shows this immediately and offers a re-run; `null` means there is nothing
+ * saved and the page has to run one.
+ */
+export async function fetchLatestAnalysis(): Promise<AnalysisResponse | null> {
+  let res: Response
+  try {
+    // Shorter than a panel read: this one runs before the page has drawn anything, so a backend
+    // that is not answering should cost the reader seconds, not twenty.
+    res = await fetch('/api/analysis/latest', { signal: AbortSignal.timeout(6_000) })
+  } catch {
+    return null // no backend yet: the caller falls through to a normal run
+  }
+  if (res.status === 404) return null
+  if (!res.ok) {
+    throw new BackendError(`Could not read the last review (${res.status}).`, res.status)
+  }
+  return (await res.json()) as AnalysisResponse
+}
 
 /**
  * Try POST /api/analyze; fall back to bundled fixtures so the UI works before the backend does.

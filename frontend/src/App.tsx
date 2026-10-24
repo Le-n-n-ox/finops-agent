@@ -1,7 +1,7 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Info, PanelLeftClose, PanelLeftOpen, RefreshCw, TriangleAlert, X } from 'lucide-react'
-import { fetchDashboard, fetchEvents, fetchLLMStatus, fetchWorkloadRows, streamAnalysis, type LoadResult } from '@/api'
+import { fetchDashboard, fetchEvents, fetchLatestAnalysis, fetchLLMStatus, fetchWorkloadRows, streamAnalysis, type LoadResult } from '@/api'
 import type { DecisionStatus, DashboardSummary, EventRow, LLMStatus, WorkloadResult, WorkloadRow } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -141,6 +141,10 @@ export default function App() {
   const [state, setState] = useState<LoadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  // When the screen is showing the saved review rather than one that just ran, this is its
+  // timestamp. The banner says so and offers a re-run: answering "how old is this?" with silence
+  // is how a saved report gets mistaken for a fresh one.
+  const [savedAt, setSavedAt] = useState<string | null>(null)
   const [scenario, setScenario] = useState('all')
   const [filter, setFilter] = useState<DecisionStatus | 'all'>('all')
   const [view, setView] = useState<View>('analysis')
@@ -212,14 +216,41 @@ export default function App() {
   const runIdRef = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (fresh = false) => {
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
     const runId = ++runIdRef.current
 
-    setLoading(true)
     setError(null)
+    // The skeleton goes up before anything is awaited. The saved-review probe can take as long as
+    // its timeout, and waiting on a slow backend with an empty page is indistinguishable from a
+    // broken app - which is the failure this whole change was meant to remove.
+    setLoading(true)
+
+    // The workspace opens on the last completed review. A full review is minutes of model time,
+    // and paying it again before showing anything is what made opening the workspace feel stuck.
+    // `fresh` is the reader asking for a new one: only then does the agent cycle run.
+    if (!fresh) {
+      const saved = await fetchLatestAnalysis().catch(() => null)
+      if (runId !== runIdRef.current) return
+      if (saved) {
+        setState({ data: saved, source: 'api' })
+        setSavedAt(saved.generated_at ?? null)
+        setFilter('all')
+        setLoading(false)
+        void fetchDashboard().then((d) => { if (runId === runIdRef.current) setDashboard(d.data) })
+        void fetchEvents().then((e) => { if (runId === runIdRef.current) setEvents(e.data) })
+        void fetchWorkloadRows().then((w) => { if (runId === runIdRef.current) setWorkloadRows(w.data) })
+        return
+      }
+    }
+
+    // A fresh run starts from nothing. Folding its streamed results into the saved review would
+    // show every workload twice and double the totals for the whole run, and leave the old
+    // numbers under an error if the run then failed.
+    setState(null)
+    setSavedAt(null)
     setProgress({ done: 0, total: 0, startedAt: Date.now() })
     try {
       // The run is streamed. A full analysis is a multi-turn conversation with the model server
@@ -354,7 +385,7 @@ export default function App() {
     scenario,
     onScenarioChange: setScenario,
     loading,
-    onRun: () => void load(),
+    onRun: () => void load(true),
     canExport: !!state,
     onExport: (format: 'markdown' | 'json') => void exportReport(format),
   }
@@ -408,7 +439,7 @@ export default function App() {
               <p className="flex items-start justify-center gap-2 text-sm font-medium text-red-800 dark:text-red-200">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden />{error}
               </p>
-              <Button variant="outline" size="sm" className="mt-4" onClick={() => void load()}>
+              <Button variant="outline" size="sm" className="mt-4" onClick={() => void load(true)}>
                 <RefreshCw aria-hidden />Try again
               </Button>
             </div>
@@ -426,6 +457,23 @@ export default function App() {
               startedAt={progress.startedAt}
               model={state?.data.llm_model ?? llmStatus?.model}
             />
+          )}
+
+          {state && savedAt && !loading && (
+            // Said plainly, with the timestamp, because a saved review that looks fresh is worse
+            // than an empty screen: every number below it would be read as current.
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-3 text-sm">
+              <p className="flex items-start gap-2 text-muted-foreground">
+                <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
+                <span>
+                  Showing the saved review from {new Date(savedAt).toLocaleString()}. Re-run it to
+                  review the data as it stands now.
+                </span>
+              </p>
+              <Button size="sm" variant="outline" onClick={() => void load(true)}>
+                <RefreshCw aria-hidden />Re-run review
+              </Button>
+            </div>
           )}
 
           {state && (

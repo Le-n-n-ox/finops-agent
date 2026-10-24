@@ -3,6 +3,7 @@
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 # Updated import to 'analysis'
 from app.api.routes import analysis, data, reports
@@ -22,6 +23,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT"],
     allow_headers=["Content-Type"],
 )
+
+# A saved review is a ~1.5 MB JSON document and compresses about 8.6x. The middleware skips
+# text/event-stream, so the analysis stream is unaffected.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
