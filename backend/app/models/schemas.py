@@ -385,8 +385,8 @@ class ToolCall(BaseModel):
 
 
 class ReviewCycle(BaseModel):
-    """One phase of the Proposer -> Critic -> Judge cycle, kept separate so the reasoning is auditable."""
-    role: str                        # "proposer" | "critic" | "judge"
+    """One phase of the Proposer -> Critic -> Revision -> Judge cycle, kept separate so the reasoning is auditable."""
+    role: str                        # "proposer" | "critic" | "revision" | "judge"
     summary: str = ""
     steps: List[ToolCall] = []
     objections: List[CriticObjection] = []
@@ -423,7 +423,7 @@ class WorkloadResult(BaseModel):
     confidence_basis: str = ""   # how confidence_score was derived, in one line
     evidence_trail: list[str] = Field(default_factory=list)
     objections: list[CriticObjection] = []   # adversarial objections raised during the review cycle
-    cycles: list[ReviewCycle] = []           # proposer / critic / judge, in order (agent mode only)
+    cycles: list[ReviewCycle] = []           # proposer / critic / revision / judge, in order (agent mode only)
     historical_lessons: list[str] = []       # human rejections injected into the proposer's prompt
     checks: list[CriticCheck] = []
     proposal: OptimizationProposal
@@ -510,7 +510,7 @@ class AgentAuditLog(BaseModel):
     session_id: str
     workload_id: str
     steps: List[ToolCall] = []
-    cycles: List[ReviewCycle] = []           # proposer / critic / judge, in order
+    cycles: List[ReviewCycle] = []           # proposer / critic / revision / judge, in order
     final_decision: Optional[DecisionStatus] = None
     verification_report: List[VerificationStep] = []
     confidence_score: float = Field(default=0.0, ge=0, le=100)

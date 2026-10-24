@@ -1,7 +1,9 @@
 from __future__ import annotations
 import json
 import logging
+import os
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +16,7 @@ from app.models.schemas import (
     AgentAuditLog,
     ToolCall,
     DecisionStatus,
+    ProposalStatus,
     ReviewCycle,
     CriticObjection,
     VerificationResult,
@@ -27,7 +30,8 @@ from app.models.schemas import (
 from app.services.agent_tools import AgentToolbox
 from app.services.verification_service import VerificationService
 from app.services.redaction import scrub
-from app.services import adversarial_service
+from app.services import adversarial_service, critic_service, optimizer_service
+from app.services.confidence_service import score_priority
 from app.integrations.llm_client import LLMUnavailable
 
 logger = logging.getLogger(__name__)
@@ -77,6 +81,76 @@ PLAN_NUDGE = (
     "Your plan was stated but no tool was called. Call the first tool now and gather the "
     "evidence the plan depends on."
 )
+
+# The revision turn: the proposer answers the objections it never saw. The three answers are the
+# only ones that exist, because anything else would be the model editing a number - which it may
+# never do. "narrow" keeps one resource's reduction and gives the other back to its current
+# value, so the numbers still come from the optimizer; the deterministic critic then decides the
+# narrowed change on its own terms.
+REVISION_SYSTEM = (
+    "You are the FinOps analyst who proposed this change. The adversarial reviewer raised blocking "
+    "objections that you have not answered. Answer them in one of three ways:\n"
+    "  \"concede\" - withdraw the change; the objection is right and there is nothing safe to do.\n"
+    "  \"narrow\"  - keep the reduction on ONE resource and leave the other at its current request.\n"
+    "  \"keep\"    - stand by the change and name the evidence that answers the objection.\n"
+    "You may not invent a number, a resource value or an incident. The deterministic critic "
+    "re-decides whatever you choose.\n"
+    "Reply with JSON only: {\"action\": \"concede\"|\"narrow\"|\"keep\", "
+    "\"resource\": \"cpu\"|\"memory\"|null, \"reason\": \"<one sentence>\"}. "
+    "\"resource\" is the one to KEEP when the action is \"narrow\"."
+)
+
+
+def _parse_revision(content: str | None) -> tuple[str, str | None, str]:
+    """Read the revision turn's answer, and never let a broken one change the outcome.
+
+    Anything unparseable means "keep": a garbled reply must not silently withdraw a real
+    recommendation, and it must not be read as permission to drop half of it either.
+    """
+    text = (content or "").strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        return "keep", None, "The revision answer was not usable, so the proposal stands."
+    try:
+        payload = json.loads(text[start:end + 1])
+    except (TypeError, ValueError):
+        return "keep", None, "The revision answer was not valid JSON, so the proposal stands."
+    if not isinstance(payload, dict):
+        return "keep", None, "The revision answer was not an object, so the proposal stands."
+
+    action = str(payload.get("action") or "").strip().lower()
+    resource = str(payload.get("resource") or "").strip().lower() or None
+    reason = str(payload.get("reason") or "").strip()
+    if action not in ("concede", "narrow", "keep"):
+        return "keep", None, reason or "The revision answer named no action, so the proposal stands."
+    if action == "narrow" and resource not in ("cpu", "memory"):
+        return "keep", None, reason or "The revision named no resource to keep, so the proposal stands."
+    return action, (resource if action == "narrow" else None), reason
+
+
+REVIEW_ENGINES = ("native", "langgraph")
+
+
+def review_engine() -> str:
+    """Which engine runs the phases.
+
+    `native` is the default: the phases are a sequence of calls. `langgraph` runs the same
+    functions as a state machine whose conditional edge is the revision decision. Anything else -
+    including a typo - falls back to native rather than failing a run over a setting.
+    """
+    engine = os.getenv("REVIEW_ENGINE", "native").strip().lower()
+    return engine if engine in REVIEW_ENGINES else "native"
+
+
+@dataclass
+class ReviewRun:
+    """What the phases produced, for the assembly step that turns it into a verdict."""
+    proposer: ReviewCycle
+    critic: ReviewCycle
+    formal: WorkloadResult
+    revision: ReviewCycle | None
+    revised: bool
+    judge: ReviewCycle
 
 
 def deterministic_result(bundle: InputBundle, workload_id: str,
@@ -473,7 +547,7 @@ class AgentOrchestrator:
 
     # ------------------------------------------------------------------ phase 3: judge
     async def _run_judge(self, workload_id: str, proposer: ReviewCycle, critic: ReviewCycle,
-                         formal: WorkloadResult | None) -> ReviewCycle:
+                         formal: WorkloadResult | None, revision: ReviewCycle | None = None) -> ReviewCycle:
         """Weigh the objections and rule. The Judge can only downgrade; it cannot approve."""
         cycle = ReviewCycle(role="judge")
         verdict, rationale = adversarial_service.judge_verdict(critic.objections, formal)
@@ -493,6 +567,9 @@ class AgentOrchestrator:
                     f"Proposer: {proposer.summary or '(none)'}\n"
                     f"Critic objections: " + ("; ".join(o.message for o in critic.objections) or "(none)") + "\n"
                     f"Ruling: {verdict} - {rationale}")
+            if revision is not None:
+                user = (f"{user}\nAfter the review the proposer was given one turn to answer those "
+                        f"objections and chose '{revision.verdict}': {revision.summary}")
             # The Judge narrates; it does not reason with tools. Its message list is its own, and
             # the deterministic ruling above stands whatever the model says.
             messages: List[Dict[str, Any]] = []
@@ -514,10 +591,185 @@ class AgentOrchestrator:
         cycle.completed_at = datetime.now(timezone.utc)
         return cycle
 
+    # ------------------------------------------------------------------ phase 2b: revision
+    def _needs_revision(self, critic: ReviewCycle, formal: WorkloadResult | None) -> bool:
+        """Whether the review has something the proposer must answer.
+
+        Referenced by both the native sequence and the graph's conditional edge, so the two
+        engines cannot disagree about when the loop runs.
+        """
+        if formal is None or formal.proposal.proposed is None:
+            return False
+        return any(objection.severity == "blocking" for objection in critic.objections)
+
+    async def _run_revision(self, workload_id: str, critic: ReviewCycle,
+                            formal: WorkloadResult | None,
+                            steps: List[ToolCall]) -> tuple[ReviewCycle | None, WorkloadResult | None]:
+        """One turn for the proposer to answer the objections the critic raised.
+
+        Without this the cycle is a one-way pipeline: the critic objects, the judge escalates, and
+        the proposal that was never given a chance to answer is the one on screen. The proposer may
+        concede, narrow the change to one resource, or stand by it - and the deterministic critic
+        decides the result, so the model still never sets a number.
+
+        Returns (cycle, revised result) where the result is None when nothing changed.
+        """
+        blocking = [objection for objection in critic.objections if objection.severity == "blocking"]
+        # There has to be a change on the table to answer for. A workload the optimizer already
+        # left alone has nothing to narrow, and an objection to it is not the proposer's to
+        # resolve. Everything else - approved, deferred, held for review - gets its turn.
+        if formal is None or not self._needs_revision(critic, formal):
+            return None, None
+
+        proposal = formal.proposal
+        current, proposed = proposal.current, proposal.proposed
+        if proposed is None:
+            return None, None
+
+        cycle = ReviewCycle(role="revision")
+        user = (
+            f"Workload: {workload_id}\n"
+            f"Current requests: CPU {current.cpu_request_millicores} millicores, "
+            f"memory {current.memory_request_mib} MiB.\n"
+            f"Proposed requests: CPU {proposed.cpu_request_millicores} millicores, "
+            f"memory {proposed.memory_request_mib} MiB.\n"
+            f"Blocking objections:\n"
+            + "\n".join(f"- [{o.code}] {o.message}" for o in blocking)
+        )
+
+        try:
+            messages: List[Dict[str, Any]] = []
+            response = await self._chat(REVISION_SYSTEM, user, messages, tools=[])
+            action, resource, reason = _parse_revision(response.get("content"))
+        except Exception as exc:  # noqa: BLE001 - a revision that cannot run leaves the review as it was
+            if isinstance(exc, LLMUnavailable):
+                cause = scrub(f"{type(exc).__name__}: {exc}")
+                self.model_outage = self.model_outage or cause
+                cycle.verdict = "unavailable"
+                cycle.summary = (f"The proposer was not asked to answer the objections because the "
+                                 f"model server became unavailable ({cause}).")
+            else:
+                logger.warning("The revision turn failed for %s: %s", workload_id, scrub(str(exc)))
+                cycle.verdict = "unavailable"
+                cycle.summary = "The proposer's revision turn failed, so the review stands as it was."
+            cycle.completed_at = datetime.now(timezone.utc)
+            return cycle, None
+
+        revised: WorkloadResult | None = None
+        if action == "narrow" and resource in ("cpu", "memory"):
+            revised = self._narrowed(formal, keep=resource, reason=reason)
+            cycle.verdict = "narrow"
+            cycle.summary = (f"Kept the {resource} reduction and gave the other resource back to its "
+                             f"current request: {reason}")
+            if revised is not None and revised.decision is not DecisionStatus.APPROVED:
+                cycle.summary = (f"{cycle.summary} The narrowed change did not pass the critic "
+                                 f"({revised.decision.value}), so it is reported as such.")
+        elif action == "concede":
+            revised = self._withdrawn(formal, reason)
+            cycle.verdict = "concede"
+            cycle.summary = f"Withdrew the change after review: {reason}"
+        else:
+            cycle.verdict = "keep"
+            cycle.summary = f"Stood by the change: {reason}"
+
+        # The objections that survive are the ones that still apply to the proposal now on the
+        # table. They are recomputed deterministically: dropping the memory change has to retire a
+        # memory-pressure objection, or the judge would keep escalating a change nobody made.
+        if revised is not None:
+            cycle.objections = adversarial_service.raise_objections(
+                proposal=revised.proposal,
+                result=revised,
+                steps=steps,
+                bundle=self.bundle,
+                workload_id=workload_id,
+            )
+        cycle.completed_at = datetime.now(timezone.utc)
+        return cycle, revised
+
+    def _narrowed(self, formal: WorkloadResult, *, keep: str, reason: str) -> WorkloadResult:
+        """Keep one resource's reduction, give the other back, and re-price the result.
+
+        The saving is recomputed rather than carried over: the critic reports whatever
+        `estimated_monthly_saving_usd` says, and inheriting the two-resource figure for a
+        one-resource change would overstate the money on the page.
+        """
+        proposal = formal.proposal
+        current, proposed = proposal.current, proposal.proposed
+        if proposed is None:
+            return self._withdrawn(formal, reason)
+
+        update = ({"memory_request_mib": current.memory_request_mib} if keep == "cpu"
+                  else {"cpu_request_millicores": current.cpu_request_millicores})
+        narrowed = proposed.model_copy(update=update)
+        if (narrowed.cpu_request_millicores == current.cpu_request_millicores
+                and narrowed.memory_request_mib == current.memory_request_mib):
+            # Nothing left to change: the objection answered the whole proposal.
+            return self._withdrawn(formal, reason)
+
+        prior = proposal.savings_estimate
+        estimate = optimizer_service.estimate_monthly_savings(
+            current, narrowed, self.bundle.cost_model,
+            replicas=prior.replicas if prior else 1,
+            days=prior.days if prior else 30,
+        )
+        value_score = (estimate.monthly_savings_usd
+                       if estimate.monthly_savings_usd is not None
+                       else estimate.total_request_reduction_pct / 100.0)
+        updated = proposal.model_copy(update={
+            "proposed": narrowed,
+            "estimated_monthly_saving_usd": estimate.monthly_savings_usd or 0.0,
+            "savings_estimate": estimate,
+            "reasons": [*proposal.reasons, f"Narrowed after review: {reason}"],
+        })
+        priority, breakdown = score_priority(
+            updated, value_score, updated.confidence.score if updated.confidence else 0.0,
+        )
+        return critic_service.evaluate(
+            updated.model_copy(update={"priority_score": priority, "priority_breakdown": breakdown}),
+            self.bundle,
+        )
+
+    def _withdrawn(self, formal: WorkloadResult, reason: str) -> WorkloadResult:
+        """The proposer conceded: no change, decided by the deterministic critic, not by prose."""
+        withdrawn = formal.proposal.model_copy(update={
+            "status": ProposalStatus.NO_CHANGE,
+            "proposed": None,
+            "estimated_monthly_saving_usd": 0.0,
+            "priority_score": 0.0,
+            "reasons": [*formal.proposal.reasons, f"Withdrawn after review: {reason}"],
+        })
+        return critic_service.evaluate(withdrawn, self.bundle)
+
     # ------------------------------------------------------------------ entry point
     async def analyze_workload_agentic(self, workload_id: str) -> tuple[WorkloadResult, AgentAuditLog]:
-        session_id = str(uuid.uuid4())
-        audit_log = AgentAuditLog(session_id=session_id, workload_id=workload_id)
+        """Review one workload: prepare, run the phases, assemble the verdict.
+
+        The phases can run two ways. `REVIEW_ENGINE=native` (the default) runs them as a sequence
+        of calls; `REVIEW_ENGINE=langgraph` runs the same functions as a LangGraph state machine
+        whose conditional edge is the revision decision. The graph changes how the loop is
+        expressed, not what decides anything: both paths call the same phase methods and the same
+        deterministic critic, and the parity test keeps them producing the same verdicts.
+        """
+        audit_log, lessons = self._begin_review(workload_id)
+
+        run: ReviewRun | None = None
+        if review_engine() == "langgraph":
+            try:
+                from app.services.review_graph import run_review_graph
+
+                run = await run_review_graph(self, workload_id, audit_log, lessons)
+            except Exception as exc:  # noqa: BLE001 - a graph failure must not cost a workload its review
+                logger.warning("The LangGraph engine failed for %s; using the native loop instead: %s",
+                               workload_id, scrub(str(exc)))
+                audit_log.cycles.clear()
+        if run is None:
+            run = await self._run_phases(workload_id, audit_log, lessons)
+
+        return self._assemble(workload_id, audit_log, run)
+
+    def _begin_review(self, workload_id: str) -> tuple[AgentAuditLog, List[str]]:
+        """Fresh per-workload state: a new audit log, and a toolbox bound to this workload."""
+        audit_log = AgentAuditLog(session_id=str(uuid.uuid4()), workload_id=workload_id)
         # One workload's outage says nothing about the next one's.
         self.model_outage = None
         # A toolbox per workload, bound to this workload.
@@ -528,10 +780,13 @@ class AgentOrchestrator:
         # workload's name - the model choosing which proposal the safety check judges, which
         # is the one thing the model must never do. A bound toolbox refuses the call instead.
         self.toolbox = AgentToolbox(self.bundle, workload_id=workload_id)
-
         lessons = self._historical_lessons(workload_id)
         audit_log.historical_lessons = lessons
+        return audit_log, lessons
 
+    async def _run_phases(self, workload_id: str, audit_log: AgentAuditLog,
+                          lessons: List[str]) -> "ReviewRun":
+        """The native engine: proposer, critic, revision, judge - in that order."""
         # --- Phase 1: Proposer -------------------------------------------------------
         proposer = await self._run_proposer(audit_log, workload_id, lessons)
         audit_log.cycles.append(proposer)
@@ -542,21 +797,46 @@ class AgentOrchestrator:
         critic = await self._run_critic(audit_log, workload_id, proposer, formal)
         audit_log.cycles.append(critic)
 
+        # --- Phase 2b: Revision ------------------------------------------------------
+        # The proposer answers the objections it never saw. Without this the cycle is a one-way
+        # pipeline: the critic objects, the judge escalates, and the proposal that was never
+        # allowed to respond is the one published.
+        revision, revised = await self._run_revision(workload_id, critic, formal, audit_log.steps)
+        if revision is not None:
+            audit_log.cycles.append(revision)
+        if revised is not None:
+            formal = revised
+
+        # The judge weighs the objections that survive, not the ones the revision retired. An
+        # empty list is an answer: it means the revision answered all of them, and falling back to
+        # the critic's list on falsiness would keep escalating a change nobody is making.
+        effective_critic = (critic if revised is None or revision is None
+                            else critic.model_copy(update={"objections": revision.objections}))
+
         # --- Phase 3: Judge ----------------------------------------------------------
-        judge = await self._run_judge(workload_id, proposer, critic, formal)
+        judge = await self._run_judge(workload_id, proposer, effective_critic, formal, revision)
         audit_log.cycles.append(judge)
 
-        # --- Assemble the final result ----------------------------------------------
-        verification = self.verifier.verify_report(proposer.summary or "", audit_log.steps)
+        return ReviewRun(proposer=proposer, critic=critic, formal=formal, revision=revision,
+                         revised=revised is not None, judge=judge)
+
+    def _assemble(self, workload_id: str, audit_log: AgentAuditLog,
+                  run: "ReviewRun") -> tuple[WorkloadResult, AgentAuditLog]:
+        """Turn the phases into the verdict the report publishes."""
+        revision = run.revision
+        effective_critic = (run.critic if not run.revised or revision is None
+                            else run.critic.model_copy(update={"objections": revision.objections}))
+
+        verification = self.verifier.verify_report(run.proposer.summary or "", audit_log.steps)
         audit_log.verification_report = [
             VerificationStep(claimed_value=step.claimed_value, status=step.status)
             for step in _verification_steps(verification)
         ]
-        confidence, basis = self._score_confidence(verification, formal, critic.objections)
+        confidence, basis = self._score_confidence(verification, run.formal, effective_critic.objections)
         audit_log.confidence_score = confidence
         audit_log.evidence_trail = self.verifier.evidence_trail(audit_log.steps)
 
-        final_result = self._apply_judgment(formal, critic, judge, confidence, basis, audit_log)
+        final_result = self._apply_judgment(run.formal, effective_critic, run.judge, confidence, basis, audit_log)
         if self.model_outage:
             # Say it on the result, not only in the cycle summary: this is the line a reviewer
             # reads next to the decision, and it must not let them believe a model reviewed
@@ -696,13 +976,13 @@ class AgentOrchestrator:
         return WorkloadResult(
             workload_id=audit_log.workload_id,
             decision=DecisionStatus.NEEDS_REVIEW,
-            risk_level="high",
+            risk_level=RiskLevel.HIGH,
             reason=("The agent never investigated this workload, so the deterministic policy "
                     "check was never run and there is no verdict to publish."),
             checks=[],
             proposal=OptimizationProposal(
                 proposal_id="err", workload_id=audit_log.workload_id,
-                status="needs_review", current=ResourceSettings(), metrics=UsageMetrics(), created_at=self._now()
+                status=ProposalStatus.NEEDS_REVIEW, current=ResourceSettings(), metrics=UsageMetrics(), created_at=self._now()
             )
         )
 

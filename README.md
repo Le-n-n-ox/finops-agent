@@ -8,11 +8,153 @@ A recommendation-only FinOps prototype. The optimizer proposes lower Kubernetes 
 2. Computes per-workload usage percentiles and a candidate request.
 3. Applies deterministic data-quality, freshness, P99, and minimum-reduction checks.
 4. Has the critic approve, defer, reject, or request review, with evidence for its decision.
-5. Runs the same decision path inside a **Proposer → Critic → Judge** review cycle that adds red-team objections, an evidence trail, and a confidence score.
+5. Runs the same decision path inside a **Proposer → Critic → Revision → Judge** review cycle that adds red-team objections, the proposer's answer to them, an evidence trail, and a confidence score.
 6. Returns a report and review-only YAML patch for approved recommendations.
 7. Carries human rejections forward as "Historical Lessons" into the next analysis.
 
 The Pydantic models in `backend/app/models/schemas.py` define the shared input and output contract. Units are CPU millicores, memory MiB, and timezone-aware ISO-8601 timestamps. Kubernetes limits are included as context and are never changed.
+
+## Quick start (from a clean clone)
+
+Python 3.11+ and pip are the only requirements for the API. No Zetaris tenant, no model server:
+
+```bash
+git clone <this repository> finops-agent
+cd finops-agent
+
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\Activate.ps1
+pip install -r backend/requirements.txt
+
+cp .env.example .env                 # Windows: copy .env.example .env
+export SAMPLE_MODE=true              # Windows: $env:SAMPLE_MODE="true"
+
+uvicorn app.main:app --port 8000 --app-dir backend
+curl -s localhost:8000/api/health
+# {"status":"ok","mode":"demo","sample_mode":"true","data_source":"local","llm_backend":"simulated"}
+```
+
+`SAMPLE_MODE=true` reads the local fixtures and answers with the deterministic stand-in — nothing
+external is contacted, and the response says so (`llm_backend: "simulated"`). Drop the variable and
+`.env` decides instead; see [Dependencies](#dependencies).
+
+Frontend, in a second terminal (needs Node 18+):
+
+```bash
+cd frontend && npm install && npm run dev      # http://localhost:5173, proxies /api to :8000
+```
+
+Check the install:
+
+```bash
+python -m pytest backend/tests -q              # 250 passed
+```
+
+The agents run as a local FastAPI service. There is **no Google Colab notebook** and no Colab link:
+the review cycle needs a long-running process and a model server, neither of which a notebook
+provides well.
+
+## Usage
+
+Every route is under `/api`. `POST /api/analyze` runs the review; everything else reads the result.
+
+```bash
+# Run the review over every workload, and keep the report id
+curl -s -X POST localhost:8000/api/analyze \
+     -H 'Content-Type: application/json' -d '{"mode":"agent"}' > analysis.json
+
+# Read the last saved review without running anything
+curl -s localhost:8000/api/analysis/latest | jq '.summary'
+
+# What-if: re-run the deterministic critic against a different request
+curl -s -X POST localhost:8000/api/simulate -H 'Content-Type: application/json' \
+     -d '{"workload_id":"image-resizer","cpu_request_millicores":900,"memory_request_mib":4096}'
+
+# The report the UI downloads (JSON or Markdown)
+curl -s 'localhost:8000/api/report?format=markdown' | head -40
+```
+
+`mode` is accepted in the body and ignored: the agent cycle is the only reasoning path.
+
+## Samples
+
+Three inputs and their real outputs, captured from `SAMPLE_MODE=true`.
+
+**1. The whole review** — `POST /api/analyze` with `{"mode":"agent"}`:
+
+```json
+{
+  "workloads_evaluated": 12,
+  "approved": 4,
+  "deferred": 4,
+  "rejected": 0,
+  "needs_review": 0,
+  "no_change": 4,
+  "estimated_monthly_savings_usd": 78.25
+}
+```
+
+**2. One workload from that report** — `results[?workload_id='docs-renderer']`:
+
+```json
+{
+  "workload_id": "docs-renderer",
+  "decision": "approved",
+  "risk_level": "low",
+  "monthly_savings_estimate_usd": 27.5,
+  "confidence_score": 100.0,
+  "current":  {"cpu_request_millicores": 800, "memory_request_mib": 3072},
+  "proposed": {"cpu_request_millicores": 250, "memory_request_mib": 3072},
+  "objections": []
+}
+```
+
+Memory is untouched: the review objected to lowering it (the workload was OOMKilled) and the
+proposer narrowed the change to CPU only. The trace below is how that happened.
+
+**3. A what-if** — `POST /api/simulate`:
+
+```json
+// input
+{"workload_id": "image-resizer", "cpu_request_millicores": 900, "memory_request_mib": 4096}
+
+// output
+{
+  "workload_id": "image-resizer",
+  "original_decision": "approved",
+  "simulated_decision": "approved",
+  "cpu_change_pct": -10.0,
+  "estimated_monthly_saving_usd": 5.0,
+  "cpu_headroom_pct": 109.0,
+  "label": "Simulation only — not the official report. Nothing was saved or applied."
+}
+```
+
+## Traces
+
+Every result carries the phases that produced it, and every response names the model that answered.
+For `docs-renderer`:
+
+| Phase | Tools called | Verdict | Summary |
+|---|---|---|---|
+| proposer | `get_workload_metrics`, `analyze_rightsizing`, `validate_policy` | — | usage summary and right-sizing result gathered; the proposal is with the policy critic |
+| critic | `search_logs`, `get_dependencies`, `search_logs` | — | 1 blocking and 0 advisory objection(s) raised from the tool evidence |
+| revision | — | `narrow` | kept the CPU reduction and gave memory back to its current request: the memory objection stands |
+| judge | — | `accept` | no objection survived review; the proposer's evidence stands on its own |
+
+The same data is in the response as `results[].cycles[]`, with each phase's `summary`, `steps`
+(tool, parameters, result) and `verdict`, so a reviewer can replay the reasoning rather than trust
+the prose. `results[].evidence_trail` is the one-line version of the same calls.
+
+**Which model handled the request** is named on the response, not inferred:
+
+| Run | `llm_backend` | `llm_model` |
+|---|---|---|
+| `SAMPLE_MODE=true` | `simulated` | `null` — the deterministic stand-in answered, and the UI says so |
+| Nightshift hotspot reachable | `openai-compatible` | `local-runtime/llama-3.3-70b-instruct` (`llm_base_url: http://127.0.0.1:8088/v1`) |
+
+One model answers every turn of a run; the response names it once. There is no per-phase model
+routing, and nothing claims a model answered when the stand-in did.
 
 ## One analysis path: the agent cycle
 
@@ -20,7 +162,7 @@ The Pydantic models in `backend/app/models/schemas.py` define the shared input a
 
 | Path | What runs | What it changes |
 |---|---|---|
-| agent cycle (the only one) | Deterministic optimizer → deterministic Context Critic, inside a Proposer → Critic → Judge review cycle. | The reasoning, objections, evidence trail, and confidence score — never the decision. |
+| agent cycle (the only one) | Deterministic optimizer → deterministic Context Critic, inside a Proposer → Critic → Revision → Judge review cycle. | The reasoning, objections, evidence trail, and confidence score — never the decision. |
 
 The deterministic critic owns every final status. The adversarial phase can only *downgrade* an approval to `needs_review`; it can never approve, reject, or defer, and it can never change a number. Every number that drives a decision comes from a tool result, never from the model: numbers the model writes in prose are checked back against the tool results, and any that do not trace lower the confidence score instead of being trusted. Nothing is ever applied to a cluster.
 
@@ -52,13 +194,14 @@ The critic independently checks that the proposal stays at or above its configur
 
 ## Agent review cycle
 
-`backend/app/services/agent_orchestrator.py` runs each workload through three bounded phases and records them as `ReviewCycle` objects in the audit log:
+`backend/app/services/agent_orchestrator.py` runs each workload through four bounded phases and records them as `ReviewCycle` objects in the audit log:
 
 | Phase | Role | Bound |
 |---|---|---|
 | Proposer | Gathers evidence with tools and argues for or against a reduction. | 10 iterations |
 | Critic | Red-teams the proposal. May call read-only tools to ground its objections. | 1 iteration |
-| Judge | Weighs the objections against the deterministic verdict. | 3 iterations |
+| Revision | Answers the blocking objections: concede, narrow the change to one resource, or stand by it. | 1 turn, and only when a change is on the table |
+| Judge | Weighs the objections that survive against the deterministic verdict. | 3 iterations |
 
 The critic's bound is one turn because its objections do not come from the model: they are raised
 deterministically from the retrieved evidence (`adversarial_service.raise_objections`), and the
@@ -68,6 +211,28 @@ on prose that decided nothing. The evidence it would have fetched, the logs and 
 map, is retrieved before its turn and inlined in its prompt, so one turn is enough to state the
 objections. If the model spends that turn calling a tool instead, the phase summary falls back to
 a deterministic sentence; the objections themselves are unaffected.
+
+The revision phase is what turns the cycle from a pipeline into a loop. Without it the critic
+objected, the judge escalated, and the proposal that never got to answer was the one published.
+The proposer now answers in one of three ways — **concede**, **narrow** to one resource, or
+**stand by** the change — and it still cannot touch a number: a narrowing gives one resource back
+to its current request, the deterministic critic re-decides the narrowed change, and the saving is
+recomputed for what is actually being changed. The objections are then re-raised against the
+proposal that survived, so an objection the revision answered stops escalating a change nobody is
+making any more.
+
+The same four phases can run on either of two engines, chosen by `REVIEW_ENGINE`:
+
+| Value | What runs | When to use it |
+|---|---|---|
+| `native` (default) | The phases as a sequence of calls in `agent_orchestrator.py`. | Everything. No dependency, one code path to read. |
+| `langgraph` | The same four phase functions as a LangGraph state machine: nodes are the phases, the state is the audit log, and the conditional edge is the revision decision (`backend/app/services/review_graph.py`). | When you want the loop visible as a graph rather than inferred from an async function. |
+
+The graph is not a second implementation: every node calls the orchestrator's own phase method, and
+`backend/tests/test_review_engine_parity.py` runs both engines over the fixture and fails if they
+disagree on any workload's decision, savings, confidence or objection list. A broken or missing
+`langgraph` falls back to the native sequence and logs why, so the engine setting can never cost a
+workload its review.
 
 The Critic's objections are grounded in evidence the agent actually retrieved, not invented. The stable codes are `RECURRING_EVENT_UNMODELLED`, `INCIDENT_OVERLAP_IGNORED`, `LOG_PRESSURE_IGNORED`, `DEPENDENCY_PRESSURE_IGNORED`, `VERIFICATION_GAP`, and `THIN_EVIDENCE`; each carries a `blocking` or `advisory` severity.
 
@@ -161,7 +326,7 @@ The panels that carry the agent's work:
 
 | Panel | What it shows | Endpoint |
 |---|---|---|
-| **Cycle** tab (detail panel) | The Proposer → Critic → Judge phases as they ran: each phase's summary, the tools it called, the objections it raised, and the Judge's ruling. | `GET /api/analysis/latest`, `POST /api/analyze/stream` |
+| **Cycle** tab (detail panel) | The Proposer → Critic → Revision → Judge phases as they ran: each phase's summary, the tools it called, the objections it raised, and the Judge's ruling. | `GET /api/analysis/latest`, `POST /api/analyze/stream` |
 | **What-if simulator** | Move the CPU/memory request sliders and the deterministic critic re-decides against your numbers. Nothing is saved and no patch is produced. | `POST /api/simulate` |
 | **Review history** | What a human already decided about this workload, with the structured rejection reasons — the exact text the agent replays as "Historical Lessons" next time. | `GET /api/reports/{id}`, `GET /api/decisions` |
 | **Decision history** (History page) | Every decision the critic has made, across reports, with a search box, a status filter, and a validity column. A decision whose metrics have moved since it was made is marked stale — and the backend refuses to accept a stale decision for implementation. | `GET /api/decisions`, `GET /api/reports/{id}` |
@@ -193,6 +358,27 @@ dark-mode screen is not white text on white paper.
 
 The `data/` directory contains synthetic fixture inputs: `deployments.yaml`, `usage_history.csv`, `business_events.json`, `incident_history.csv`, `policy.yaml`, and `cost_model.json`. The policy includes a fixed `simulation_now` so the demo scenarios and freshness decisions are repeatable. `data/sample_analysis_response.json` is a sample output. These fixtures demonstrate outcomes; they are not live production telemetry.
 
+## Dependencies
+
+| What | Needed for | Without it |
+|---|---|---|
+| Python 3.11+ and `backend/requirements.txt` | the API and the tests | nothing runs |
+| Node 18+ and npm | the frontend | the API works; no UI |
+| A **Meterless Nightshift hotspot** (OpenAI-compatible, `:8088`) | model-written narrations and arguments | `SAMPLE_MODE=true`, or `LLM_BACKEND=simulated` — the deterministic stand-in answers the same turns |
+| **Zetaris** (`finops_data` with the four tables) | `DATA_SOURCE=zetaris` | the local fixtures in `data/` (the default) |
+| Docker and Docker Compose | the containerised stack | run locally, as in Quick start |
+
+Both external services are optional by design, and each has an explicit off switch: the model by
+`LLM_BACKEND=simulated`, the data by `DATA_SOURCE=local`. `SAMPLE_MODE=true` sets both, and reports
+itself in `GET /api/health`.
+
+Python packages: `fastapi[standard]`, `pydantic`, `PyYAML`, `pandas`, `httpx`, `python-dotenv`,
+`pytest`, and `langgraph` (only used when `REVIEW_ENGINE=langgraph`).
+
+`.env.example` holds placeholders only: every credential line is empty (`METERLESS_API_KEY`,
+`NVIDIA_API_KEY`, `ZETARIS_*`), and the rest are documented defaults such as the local base URL and
+port numbers. No secret is ever committed, and none is printed by `scripts/check_model.py`.
+
 ## Integrations
 
 - **Zetaris:** `backend/app/integrations/zetaris_client.py` queries the deployments, usage, events, and incidents tables from `finops_data`, including paginated query results. Set the `ZETARIS_*` values in the root `.env` to use Zetaris; when it is not configured, the loader uses local fixture files. Local `policy.yaml` and `cost_model.json` remain the source for those configuration values. See [`docs/ZETARIS_SETUP.md`](docs/ZETARIS_SETUP.md).
@@ -204,14 +390,52 @@ Run `python scripts/check_model.py` to see whether the model server is reachable
 
 More details: [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md), [`docs/CONTRACT.md`](docs/CONTRACT.md), and [`docs/FINOPS_METHOD.md`](docs/FINOPS_METHOD.md) for the sizing formula, risk findings, the agent review cycle, and measurable scenario results.
 
-## Tests and scenario evaluation
+## Tests and conformance checks
 
 ```bash
-python -m pytest                      # backend suite
-python scripts/evaluate_scenarios.py  # planted-scenario acceptance table
+python -m pytest backend/tests -q          # 250 passed
+python scripts/evaluate_scenarios.py       # planted-scenario acceptance table
+python scripts/check_model.py              # is the Nightshift hotspot reachable, and with which credential?
+python scripts/check_zetaris_query.py      # does the Zetaris connector return the four tables?
 ```
 
-`scripts/evaluate_scenarios.py` replays the labelled scenarios in `data/test_scenarios.json` and reports expected vs. actual per scenario, plus recall, false-positive rate, and the count of event/incident reduction suggestions. The current fixture passes 7/7 with 100% recall and a 0% false-positive rate. See [`docs/FINOPS_METHOD.md`](docs/FINOPS_METHOD.md) for the table and its caveats.
+`scripts/evaluate_scenarios.py` replays the labelled scenarios in `data/test_scenarios.json` and
+reports expected vs. actual per scenario, plus recall, false-positive rate, and the count of
+event/incident reduction suggestions. Run against the current fixture:
+
+```text
+| ID     | Scenario                          | Expected                    | Actual        | Result |
+| SCN-01 | Safe over-provisioning opportunity| recommend_small_reduction   | approved      | PASS   |
+| SCN-02 | Protected critical workload       | block                       | rejected      | PASS   |
+| SCN-03 | Active business event freeze      | defer                       | deferred      | PASS   |
+| SCN-04 | Incident memory protection        | defer_or_block              | rejected      | PASS   |
+| SCN-05 | Insufficient data                 | defer_insufficient_data     | needs_review  | PASS   |
+| SCN-06 | Maximum reduction cap             | block_or_clamp              | rejected      | PASS   |
+| SCN-07 | Limits preservation               | validation_error_if_limit_changed | approved | PASS   |
+
+- Scenario pass rate: 7/7 (100.0%).
+- Planted safe over-provisioning recall: 1/1 (100.0%).
+- Risk-scenario false-positive rate: 0/3 (0.0%).
+```
+
+`scripts/check_model.py` is the conformance check for the Meterless/Nightshift side: it probes the
+candidate base URLs, reports which credential source works (by name and path, never the value), and
+exits non-zero when nothing answers:
+
+```text
+Working combination:
+  base URL   : http://127.0.0.1:8088/v1
+  credential : env METERLESS_API_KEY (value hidden)
+  model      : local-runtime/llama-3.3-70b-instruct
+  server lists 77 model id(s).
+  -> 'local-runtime/llama-3.3-70b-instruct' is present on the server.
+
+OK: the local model server is reachable and authenticated.
+```
+
+`scripts/check_zetaris_query.py` is the same check for the data side: it runs a query against each
+of the four `finops_data` tables and reports row counts. See [`docs/FINOPS_METHOD.md`](docs/FINOPS_METHOD.md)
+for the scenario table's caveats.
 
 ## Run with Docker Compose
 

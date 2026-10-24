@@ -5,3 +5,6 @@ pandas>=2.2,<4
 httpx>=0.27
 python-dotenv>=1.0
 pytest>=8.0,<10
+# Optional engine for the review cycle (REVIEW_ENGINE=langgraph). The app runs without it: a
+# missing import falls back to the native phase sequence rather than failing a review.
+langgraph>=1.0
