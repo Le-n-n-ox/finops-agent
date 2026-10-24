@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS reviews(
   workload_id TEXT NOT NULL, action TEXT NOT NULL, comment TEXT, reviewer TEXT, created_at TEXT NOT NULL, outcome TEXT,
   rejection_reasons TEXT, resource TEXT, reviewer_guidance TEXT);
 CREATE TABLE IF NOT EXISTS policies(id INTEGER PRIMARY KEY AUTOINCREMENT, version TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS report_summaries(report_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, payload TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_dec_workload ON decisions(workload_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_rev_decision ON reviews(decision_id);
 CREATE INDEX IF NOT EXISTS idx_report_created ON reports(created_at);
@@ -52,6 +53,39 @@ def _parse_reasons(raw: str | None) -> list[str]:
     except (TypeError, ValueError):
         return [str(raw)]
     return [str(item) for item in parsed] if isinstance(parsed, list) else [str(parsed)]
+
+
+def _summary_payload(response: AnalysisResponse) -> dict:
+    """The handful of numbers the dashboard reads, kept beside the report instead of in it.
+
+    The dashboard used to validate the twenty most recent reports - about 1.5 MB each, ~840 ms
+    per page open - to pull a few counters out of them. This is the same information, written
+    once when the report is saved.
+    """
+    summary = response.summary
+    return {
+        "analysis_id": response.analysis_id,
+        "generated_at": response.generated_at.isoformat(),
+        "workloads_evaluated": summary.workloads_evaluated,
+        "approved": summary.approved,
+        "deferred": summary.deferred,
+        "rejected": summary.rejected,
+        "needs_review": summary.needs_review,
+        "no_change": summary.no_change,
+        "estimated_monthly_savings_usd": summary.estimated_monthly_savings_usd,
+        "top_n_findings": response.top_n_findings,
+        "workloads": [
+            {
+                "workload_id": result.workload_id,
+                "decision": result.decision.value,
+                "potential_saving_usd": round(
+                    (result.proposal.estimated_monthly_saving_usd or 0.0)
+                    + (result.proposal.suppressed_saving_usd or 0.0), 2),
+                "priority_score": result.proposal.priority_score or 0.0,
+            }
+            for result in response.results
+        ],
+    }
 
 
 class Store:
@@ -143,6 +177,9 @@ class Store:
             try:
                 self._db.execute("INSERT INTO reports VALUES (?,?,?,?)",
                                  (response.analysis_id, created.isoformat(), policy_version, response.model_dump_json()))
+                self._db.execute("INSERT OR REPLACE INTO report_summaries VALUES (?,?,?)",
+                                 (response.analysis_id, created.isoformat(),
+                                  json.dumps(_summary_payload(response), default=str)))
                 ids = [self.save_decision_record(r, response.analysis_id, fingerprints[r.workload_id], policy_version,
                                                  response.rule_version, response.input_fingerprint, created)
                        for r in response.results]
@@ -159,6 +196,41 @@ class Store:
     def latest_report(self) -> AnalysisResponse | None:
         row = self._fetchone("SELECT payload FROM reports ORDER BY created_at DESC, rowid DESC LIMIT 1")
         return AnalysisResponse.model_validate_json(row["payload"]) if row else None
+
+    def latest_report_json(self) -> str | None:
+        """The last saved report exactly as stored, without parsing it back into a model.
+
+        `latest_report` validates a ~1.5 MB payload into pydantic objects (~45 ms here) only for
+        the caller to serialise it again. The text was produced by `model_dump_json` when the run
+        finished, so handing it back unchanged is the same document.
+        """
+        row = self._fetchone("SELECT payload FROM reports ORDER BY created_at DESC, rowid DESC LIMIT 1")
+        return row["payload"] if row else None
+
+    def report_summaries(self, limit: int = 20) -> list[dict]:
+        """Dashboard-sized summaries of the most recent reports, newest first.
+
+        Reports saved before the summary table existed are summarised once on first read and the
+        row is kept: a report is append-only, so its summary never needs rebuilding.
+        """
+        rows = self._fetchall(
+            "SELECT r.report_id, r.created_at, s.payload AS summary FROM reports r "
+            "LEFT JOIN report_summaries s ON s.report_id = r.report_id "
+            "ORDER BY r.created_at DESC, r.rowid DESC LIMIT ?", (limit,))
+        summaries: list[dict] = []
+        for row in rows:
+            if row["summary"]:
+                summaries.append(json.loads(row["summary"]))
+                continue
+            report = self.get_report(row["report_id"])
+            if report is None:
+                continue
+            payload = _summary_payload(report)
+            with self._lock:
+                self._db.execute("INSERT OR REPLACE INTO report_summaries VALUES (?,?,?)",
+                                 (report.analysis_id, row["created_at"], json.dumps(payload, default=str)))
+            summaries.append(payload)
+        return summaries
 
     def list_reports(self, limit: int = 20) -> list[AnalysisResponse]:
         rows = self._fetchall("SELECT payload FROM reports ORDER BY created_at DESC, rowid DESC LIMIT ?", (limit,))

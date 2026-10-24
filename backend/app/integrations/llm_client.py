@@ -300,6 +300,11 @@ class OpenAICompatClient:
     def __init__(self, config: LLMConfig, timeout: float = 180.0) -> None:
         self.config = config
         self.timeout = timeout
+        # One pooled client for the whole analysis. A fresh AsyncClient per turn meant a TCP and
+        # TLS handshake before every single round-trip, which on a remote model server is a fixed
+        # cost the model itself never sees.
+        self._http: httpx.AsyncClient | None = None
+        self._http_loop: asyncio.AbstractEventLoop | None = None
         self.status: LLMStatus = {
             "backend": "openai-compatible",
             "model": config.model,
@@ -307,6 +312,23 @@ class OpenAICompatClient:
             "key_source": config.key_source,
             "detail": None,
         }
+
+    async def _client(self) -> httpx.AsyncClient:
+        """The pooled client, rebuilt if it was closed or the event loop changed under us."""
+        loop = asyncio.get_running_loop()
+        if self._http is not None and (self._http.is_closed or self._http_loop is not loop):
+            self._http = None
+        if self._http is None:
+            self._http = httpx.AsyncClient(timeout=self.timeout)
+            self._http_loop = loop
+        return self._http
+
+    async def aclose(self) -> None:
+        """Release the pool. Safe to call when nothing was opened."""
+        client, self._http = self._http, None
+        self._http_loop = None
+        if client is not None and not client.is_closed:
+            await client.aclose()
 
     # -- wire helpers
     def _headers(self) -> Dict[str, str]:
@@ -408,32 +430,32 @@ class OpenAICompatClient:
         for attempt in range(TRANSIENT_RETRY_ATTEMPTS):
             transient = False
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(self._url(path), headers=self._headers(), json=body)
-                    if response.status_code == 400 and self._blames_optional_params(response):
-                        # Some models reject `temperature`/`max_tokens` outright. The request is
-                        # otherwise valid, so retry it with the bare minimum rather than fail the
-                        # cycle. Only when the server says so: a 400 caused by anything else -
-                        # an unknown model id, a tool schema it rejects - is not fixed by dropping
-                        # those two fields, and retrying it anyway only doubles the wait.
-                        minimal = {key: body[key] for key in ("model", "messages", "tools") if key in body}
-                        response = await client.post(self._url(path), headers=self._headers(), json=minimal)
-                    if response.status_code >= 500:
-                        # The server is up but broken: 502/503/504 are the shapes a model server
-                        # takes while it swaps a model in.
-                        last_cause = f"returned HTTP {response.status_code}"
-                        transient = True
-                    elif response.status_code >= 400:
+                client = await self._client()
+                response = await client.post(self._url(path), headers=self._headers(), json=body)
+                if response.status_code == 400 and self._blames_optional_params(response):
+                    # Some models reject `temperature`/`max_tokens` outright. The request is
+                    # otherwise valid, so retry it with the bare minimum rather than fail the
+                    # cycle. Only when the server says so: a 400 caused by anything else -
+                    # an unknown model id, a tool schema it rejects - is not fixed by dropping
+                    # those two fields, and retrying it anyway only doubles the wait.
+                    minimal = {key: body[key] for key in ("model", "messages", "tools") if key in body}
+                    response = await client.post(self._url(path), headers=self._headers(), json=minimal)
+                if response.status_code >= 500:
+                    # The server is up but broken: 502/503/504 are the shapes a model server
+                    # takes while it swaps a model in.
+                    last_cause = f"returned HTTP {response.status_code}"
+                    transient = True
+                elif response.status_code >= 400:
+                    raise LLMUnavailable(self._redact(
+                        f"The model server at {self.config.base_url} returned HTTP {response.status_code}."
+                    ))
+                else:
+                    try:
+                        return response.json()
+                    except ValueError as exc:
                         raise LLMUnavailable(self._redact(
-                            f"The model server at {self.config.base_url} returned HTTP {response.status_code}."
-                        ))
-                    else:
-                        try:
-                            return response.json()
-                        except ValueError as exc:
-                            raise LLMUnavailable(self._redact(
-                                f"The model server at {self.config.base_url} returned a response that is not JSON."
-                            )) from exc
+                            f"The model server at {self.config.base_url} returned a response that is not JSON."
+                        )) from exc
             except httpx.HTTPError as exc:
                 last_cause = self._redact(f"could not be reached: {exc}")
                 transient = True

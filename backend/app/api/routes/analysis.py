@@ -69,6 +69,24 @@ async def analyze(req: AnalyzeRequest | None = None, svc: Services = Depends(get
         return await asyncio.to_thread(_analyze_off_loop, svc)
 
 
+@router.get("/analysis/latest")
+def latest_analysis(svc: Services = Depends(get_services)) -> Response:
+    """The last completed review, without running a new one.
+
+    Opening the workspace used to mean sitting through a fresh twelve-workload agent run before
+    anything appeared. Every report is already saved, so the page can open on the last one and
+    let the reader decide when to re-run it - which is a decision they can only make if the page
+    shows them something first.
+
+    The stored JSON is returned as it is. Validating a 1.5 MB payload into pydantic models and
+    serialising it again costs ~45 ms per call, and the bytes are already the response.
+    """
+    payload = svc.store.latest_report_json()
+    if payload is None:
+        raise HTTPException(status_code=404, detail="No review has been run yet.")
+    return Response(content=payload, media_type="application/json")
+
+
 def _sse(event: str, payload: object) -> str:
     """One server-sent event."""
     return f"event: {event}\ndata: {json.dumps(payload, default=str)}\n\n"

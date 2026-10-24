@@ -123,7 +123,11 @@ class AgentOrchestrator:
     instead of looping forever.
     """
     MAX_PROPOSER_ITERATIONS = 10
-    MAX_CRITIC_ITERATIONS = 4
+    # The critic's objections are raised by the deterministic pass below, never by the model, so
+    # its turns buy prose and nothing else. It used to spend four of them - half of a workload's
+    # round-trips - narrating a verdict it does not decide. One turn is enough to state the
+    # objections now that the evidence it would have fetched is already in the prompt.
+    MAX_CRITIC_ITERATIONS = 1
     MAX_JUDGE_ITERATIONS = 3
 
     def __init__(self, bundle: InputBundle, llm_client: Any, store: Any = None):
@@ -417,6 +421,11 @@ class AgentOrchestrator:
             "\nThe container logs and the dependency map for this workload have already been "
             "retrieved and are in the evidence trail. Use them; do not fetch them again."
         )
+        # Inline the evidence the prefetch just pulled. Without it the model could only see that
+        # those tools ran, so it re-called them - which is why the critic needed four turns.
+        for step in cycle.steps:
+            digest = json.dumps(_jsonable(step.result), default=str)[:1200]
+            current_context += f"\n{step.tool}({workload_id}) -> {digest}"
         messages: List[Dict[str, Any]] = []
 
         for _ in range(self.MAX_CRITIC_ITERATIONS):

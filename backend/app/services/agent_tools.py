@@ -17,6 +17,52 @@ class ToolResult(BaseModel):
     data: Any
     error: Optional[str] = None
 
+
+# A month of hourly usage is 720 rows, about 98 KB of JSON. Serialising that into the prompt and
+# cutting it at the 20 KB character cap produced an unparseable fragment of the OLDEST week - the
+# peak was never in what the model read. The model needs the shape and the peaks, not every row:
+# the percentiles and the maximum are computed over all samples, and only the series is thinned.
+SERIES_POINTS = 48
+
+
+def _usage_summary(workload_id: str, rows: list[UsageRow]) -> Dict[str, Any]:
+    """Counts, percentiles, the peak and a downsampled series - small, and valid JSON."""
+    if not rows:
+        return {"workload_id": workload_id, "sample_count": 0,
+                "note": "No usage samples were recorded for this workload."}
+
+    ordered = sorted(rows, key=lambda row: row.timestamp)
+    cpu = [float(row.cpu_millicores) for row in ordered]
+    mem = [float(row.memory_mib) for row in ordered]
+    cpu_peak = max(range(len(cpu)), key=cpu.__getitem__)
+    mem_peak = max(range(len(mem)), key=mem.__getitem__)
+
+    def stats(values: list[float], peak: int) -> Dict[str, Any]:
+        return {
+            "p50": round(optimizer_service.percentile(values, 50), 1),
+            "p95": round(optimizer_service.percentile(values, 95), 1),
+            "p99": round(optimizer_service.percentile(values, 99), 1),
+            "max": round(values[peak], 1),
+            "max_at": ordered[peak].timestamp.isoformat(),
+        }
+
+    step = max(1, len(ordered) // SERIES_POINTS)
+    return {
+        "workload_id": workload_id,
+        "sample_count": len(ordered),
+        "window_start": ordered[0].timestamp.isoformat(),
+        "window_end": ordered[-1].timestamp.isoformat(),
+        "cpu_millicores": stats(cpu, cpu_peak),
+        "memory_mib": stats(mem, mem_peak),
+        "series": [
+            {"t": row.timestamp.isoformat(), "cpu": round(float(row.cpu_millicores), 1),
+             "mem": round(float(row.memory_mib), 1)}
+            for row in ordered[::step]
+        ],
+        "note": ("The series is downsampled to about 48 points across the window; the "
+                 "percentiles and the peak are computed over every sample."),
+    }
+
 class AgentTool:
     def __init__(self, name: str, func: Callable, schema: Dict[str, Any], description: str):
         self.name = name
@@ -64,10 +110,11 @@ class AgentToolbox:
             return self.bundle.policy.simulation_now or datetime.now(timezone.utc)
 
         # Tool: get_workload_metrics
-        # Returns raw usage data for a specific workload
-        def get_workload_metrics(workload_id: str, **kwargs) -> List[UsageRow]:
+        # A statistical summary of the workload's usage (see _usage_summary).
+        def get_workload_metrics(workload_id: str, **kwargs) -> Dict[str, Any]:
             self._require(workload_id)
-            return [row for row in self.bundle.usage_rows if row.service == workload_id]
+            rows = [row for row in self.bundle.usage_rows if row.service == workload_id]
+            return _usage_summary(workload_id, rows)
 
         # Tool: analyze_rightsizing
         # Computes the optimal resource requests
@@ -149,7 +196,9 @@ class AgentToolbox:
             return data_loader.get_dependencies(workload_id)
 
         self.add_tool("get_workload_metrics", get_workload_metrics,
-                      {"workload_id": "string"}, "Retrieve raw usage metrics for a workload.")
+                      {"workload_id": "string"},
+                      "Summarise a workload's usage metrics: sample count, window, CPU and memory "
+                      "p50/p95/p99, the peak and when it happened, plus a downsampled series.")
         self.add_tool("analyze_rightsizing", analyze_rightsizing,
                       {"workload_id": "string"}, "Compute the deterministic right-sizing proposal.")
         self.add_tool("detect_risk_patterns", detect_risk_patterns,
