@@ -108,7 +108,7 @@ class TestAgentMode:
         assert "Agent confidence" in res.text
 
     def test_agent_results_carry_the_review_cycle(self, client):
-        """The Proposer/Critic/Judge phases must reach the reviewer, not just the audit log.
+        """The review phases must reach the reviewer, not just the audit log.
 
         A cycle the API computes and then discards is invisible reasoning, and invisible reasoning
         cannot be checked by the person who has to approve the change.
@@ -116,7 +116,11 @@ class TestAgentMode:
         body = client.post("/api/analyze", json={"mode": "agent"}).json()
         for result in body["results"]:
             roles = [c["role"] for c in result["cycles"]]
-            assert roles == ["proposer", "critic", "judge"], f"unexpected cycle order for {result['workload_id']}"
+            # The revision phase is optional: it runs only when a change is on the table and the
+            # critic raised a blocking objection. The order around it is not optional.
+            assert roles[:2] == ["proposer", "critic"], f"unexpected cycle order for {result['workload_id']}"
+            assert roles[-1] == "judge", f"the judge must rule on every workload: {roles}"
+            assert roles[2:-1] in ([], ["revision"]), f"unexpected middle phase for {result['workload_id']}: {roles}"
             for cycle in result["cycles"]:
                 assert cycle["summary"], "every phase must say what it concluded"
             assert "historical_lessons" in result

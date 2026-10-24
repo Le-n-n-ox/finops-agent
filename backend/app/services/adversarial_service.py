@@ -68,6 +68,36 @@ def _log_is_pressure(entry: dict[str, Any]) -> bool:
     return any(marker in text for marker in ("oom", "throttl", "evict", "out of memory", "killed"))
 
 
+def _pressured_resource(entry: dict[str, Any]) -> str | None:
+    """Which request the log argues against lowering, when it is specific enough to say.
+
+    An OOM kill is about memory; throttling is about CPU; an eviction is usually memory pressure
+    again. A line that names neither is left as `None`, and the objection applies to any change.
+    """
+    text = f"{entry.get('message', '')} {entry.get('level', '')}".lower()
+    if any(marker in text for marker in ("oom", "out of memory", "memory")):
+        return "memory"
+    if "evict" in text:
+        return "memory"
+    if "throttl" in text or "cpu" in text:
+        return "cpu"
+    return None
+
+
+def _reduces_resource(proposal: OptimizationProposal | None, resource: str) -> bool:
+    """True when the proposal actually lowers this request."""
+    if proposal is None or proposal.proposed is None:
+        return False
+    current, proposed = proposal.current, proposal.proposed
+    if resource == "cpu":
+        return (proposed.cpu_request_millicores is not None
+                and current.cpu_request_millicores is not None
+                and proposed.cpu_request_millicores < current.cpu_request_millicores)
+    return (proposed.memory_request_mib is not None
+            and current.memory_request_mib is not None
+            and proposed.memory_request_mib < current.memory_request_mib)
+
+
 def raise_objections(
     proposal: OptimizationProposal | None,
     result: WorkloadResult | None,
@@ -122,16 +152,27 @@ def raise_objections(
     #    on top of an OOMKill is a reliability regression, not a saving.
     if "search_logs" in called:
         for entry in _as_dicts(_result_of(steps, "search_logs")):
-            if _log_is_pressure(entry):
-                objections.append(CriticObjection(
-                    code=LOG_PRESSURE,
-                    severity="blocking",
-                    message=(f"Log at {entry.get('timestamp')} reports pressure: '{entry.get('message')}'. "
-                             f"Reducing requests while the container is being OOMKilled or throttled risks "
-                             f"an outage."),
-                    source="search_logs",
-                ))
-                break
+            if not _log_is_pressure(entry):
+                continue
+            # The objection is about a resource: an OOM kill argues against lowering memory, not
+            # against lowering CPU as well. When the change on the table leaves the pressured
+            # resource alone, this objection does not apply to it - which is what lets a narrowed
+            # proposal survive the review that rejected the wider one. A workload with no change on
+            # the table still gets the warning: there is nothing to narrow, and the pressure is
+            # worth telling a reviewer about.
+            pressured = _pressured_resource(entry)
+            if (proposal is not None and proposal.proposed is not None and pressured
+                    and not _reduces_resource(proposal, pressured)):
+                continue
+            objections.append(CriticObjection(
+                code=LOG_PRESSURE,
+                severity="blocking",
+                message=(f"Log at {entry.get('timestamp')} reports pressure: '{entry.get('message')}'. "
+                         f"Reducing requests while the container is being OOMKilled or throttled risks "
+                         f"an outage."),
+                source="search_logs",
+            ))
+            break
 
     # 4. A dependency is itself under pressure, so a reduction here can push load onto a stressed upstream.
     if "get_dependencies" in called:

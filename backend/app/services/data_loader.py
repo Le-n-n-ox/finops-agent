@@ -58,6 +58,14 @@ _SIMULATED_LOGS: dict[str, list[dict[str, Any]]] = {
         {"timestamp": "2026-10-01T12:00:00Z", "level": "INFO", "workload_id": "auth-service",
          "message": "Health check passed."},
     ],
+    # One workload that is genuinely over-provisioned AND has been under pressure. It is the case
+    # the review cycle exists for: the critic objects, the proposer answers by narrowing the change,
+    # and the smaller change is approved. Without a workload in this state the revision phase never
+    # runs, and the loop is untested by the demo.
+    "docs-renderer": [
+        {"timestamp": "2026-09-09T03:20:00Z", "level": "ERROR", "workload_id": "docs-renderer",
+         "message": "Memory limit reached during a bulk PDF render. Container OOMKilled."},
+    ],
 }
 
 _SIMULATED_DEPENDENCIES: dict[str, list[str]] = {

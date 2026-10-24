@@ -1,9 +1,13 @@
 """FastAPI entrypoint (Developer 2 owns). Run from repo root:
     uvicorn app.main:app --reload --port 8000 --app-dir backend
 """
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+
+from app.config import sample_mode
 
 # Updated import to 'analysis'
 from app.api.routes import analysis, data, reports
@@ -30,4 +34,16 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "mode": "demo"}
+    """Liveness, plus which external services this process is actually using.
+
+    `sample_mode` is reported because it changes what a run means: no Zetaris query and no model
+    call. A reviewer checking whether the external services are reachable can tell from here
+    whether they are being asked at all.
+    """
+    return {
+        "status": "ok",
+        "mode": "demo",
+        "sample_mode": "true" if sample_mode() else "false",
+        "data_source": os.getenv("DATA_SOURCE", "local").lower(),
+        "llm_backend": os.getenv("LLM_BACKEND", "auto").lower(),
+    }

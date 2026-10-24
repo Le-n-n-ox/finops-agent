@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from app.models.schemas import (
     BusinessEvent, CheckStatus, CriticCheck, DecisionStatus, IncidentRecord, InputBundle,
@@ -33,167 +34,25 @@ INCIDENT_LOOKBACK_DAYS = 180  # not in CriticPolicy yet; promote to policy.yaml 
 
 
 def evaluate_proposal(proposal: OptimizationProposal, bundle: InputBundle) -> WorkloadResult:
-    """Evaluate a proposal against metrics, events, incidents, floors, and savings."""
-    critic_policy = bundle.policy.critic
-    now = _as_utc(bundle.policy.simulation_now or datetime.now(timezone.utc))
-    checks: list[CriticCheck] = []
+    """Deprecated alias for `evaluate`. Kept so an older caller cannot NameError on it.
 
-    if proposal.status == ProposalStatus.NEEDS_REVIEW:
-        checks.append(CriticCheck(
-            name="metrics_completeness",
-            code="INSUFFICIENT_METRICS",
-            status=CheckStatus.TRIGGERED,
-            message="Data history or observation count is insufficient for optimization.",
-            evidence={"reasons": proposal.reasons, "sample_count": proposal.metrics.sample_count},
-        ))
-        return _build_result(
-            proposal, DecisionStatus.NEEDS_REVIEW, RiskLevel.MEDIUM,
-            "Insufficient usage data to generate a safe recommendation.", checks,
-        )
+    This used to be a second, parallel implementation of the critic, wired to helpers that no
+    longer exist (`_as_utc`, `_build_result`, `_generate_yaml_patch`). It was never called - the
+    live path is `evaluate` - but a copy of the decision rules that cannot run is worse than no
+    copy: it reads like the rules are defined twice. The name still resolves to the real critic.
+    """
+    return evaluate(proposal, bundle)
 
-    if proposal.status == ProposalStatus.NO_CHANGE or proposal.proposed is None:
-        checks.append(CriticCheck(
-            name="optimizer_status",
-            code="NO_OPTIMIZATION_NEEDED",
-            status=CheckStatus.PASSED,
-            message="Workload usage is already optimal or reduction is below threshold.",
-            evidence={"reasons": proposal.reasons},
-        ))
-        return _build_result(
-            proposal, DecisionStatus.NO_CHANGE, RiskLevel.LOW,
-            "Workload is already operating within optimal resource targets.", checks,
-        )
 
-    has_event_conflict = False
-    for event in bundle.events:
-        if proposal.workload_id not in event.services and "all" not in event.services:
-            continue
-        start_diff_hours = (_as_utc(event.start_at) - now).total_seconds() / 3600
-        end_diff_hours = (_as_utc(event.end_at) - now).total_seconds() / 3600
-        if (-24 <= end_diff_hours <= critic_policy.risk_window_hours and
-                start_diff_hours <= critic_policy.risk_window_hours and
-                (event.risk.lower() in {"high", "medium"} or event.expected_traffic.lower() == "high")):
-            has_event_conflict = True
-            checks.append(CriticCheck(
-                name="event_window",
-                code="UPCOMING_BUSINESS_EVENT",
-                status=CheckStatus.TRIGGERED,
-                message=f"Upcoming high-impact event '{event.name}' risk window.",
-                evidence={
-                    "event_name": event.name,
-                    "start_at": event.start_at.isoformat(),
-                    "end_at": event.end_at.isoformat(),
-                    "expected_traffic": event.expected_traffic,
-                },
-            ))
-    if has_event_conflict:
-        return _build_result(
-            proposal, DecisionStatus.DEFERRED, RiskLevel.HIGH,
-            "Resource changes deferred due to upcoming high-traffic business events.", checks,
-        )
-    checks.append(CriticCheck(
-        name="event_window",
-        code="NO_EVENT_CONFLICT",
-        status=CheckStatus.PASSED,
-        message="No conflicting business events in the evaluation window.",
-    ))
-
-    matching_incidents = [inc for inc in bundle.incidents if inc.service == proposal.workload_id]
-    if matching_incidents:
-        recent_incident = max(matching_incidents, key=lambda incident: _as_utc(incident.occurred_at))
-        checks.append(CriticCheck(
-            name="incident_pattern",
-            code="HISTORICAL_INCIDENT_CORRELATION",
-            status=CheckStatus.TRIGGERED,
-            message=f"Historical incident pattern detected: '{recent_incident.pattern}'.",
-            evidence={
-                "incident_id": recent_incident.incident_id,
-                "pattern": recent_incident.pattern,
-                "summary": recent_incident.summary,
-                "occurred_at": recent_incident.occurred_at.isoformat(),
-            },
-        ))
-        return _build_result(
-            proposal, DecisionStatus.NEEDS_REVIEW, RiskLevel.HIGH,
-            f"Workload has past incident history ({recent_incident.incident_id}); manual review required.", checks,
-        )
-    checks.append(CriticCheck(
-        name="incident_pattern",
-        code="NO_INCIDENT_CORRELATION",
-        status=CheckStatus.PASSED,
-        message="No relevant incident history associated with this workload.",
-    ))
-
-    proposed = proposal.proposed
-    p99_cpu = proposal.metrics.cpu_p99 or 0.0
-    p99_memory = proposal.metrics.memory_p99 or 0.0
-    proposed_cpu = proposed.cpu_request_millicores or 0
-    proposed_memory = proposed.memory_request_mib or 0
-    cpu_floor = p99_cpu * critic_policy.cpu_floor_p99_multiplier
-    memory_floor = p99_memory * critic_policy.memory_floor_p99_multiplier
-    floor_violation = False
-
-    if proposed_cpu < cpu_floor:
-        floor_violation = True
-        checks.append(CriticCheck(
-            name="resource_floor",
-            code="CPU_FLOOR_VIOLATION",
-            status=CheckStatus.TRIGGERED,
-            message=f"Proposed CPU request ({proposed_cpu}m) drops below P99 safety floor ({cpu_floor:.1f}m).",
-            evidence={"proposed": proposed_cpu, "required_floor": cpu_floor, "p99": p99_cpu},
-        ))
-    if proposed_memory < memory_floor:
-        floor_violation = True
-        checks.append(CriticCheck(
-            name="resource_floor",
-            code="MEMORY_FLOOR_VIOLATION",
-            status=CheckStatus.TRIGGERED,
-            message=f"Proposed memory request ({proposed_memory}MiB) drops below P99 safety floor ({memory_floor:.1f}MiB).",
-            evidence={"proposed": proposed_memory, "required_floor": memory_floor, "p99": p99_memory},
-        ))
-    if floor_violation:
-        return _build_result(
-            proposal, DecisionStatus.REJECTED, RiskLevel.HIGH,
-            "Proposed reduction breaches required P99 headroom safety floors.", checks,
-        )
-    checks.append(CriticCheck(
-        name="resource_floor",
-        code="HEADROOM_FLOOR_SAFE",
-        status=CheckStatus.PASSED,
-        message="Proposed requests maintain safe headroom above P99 usage peaks.",
-    ))
-
-    savings = proposal.estimated_monthly_saving_usd
-    if savings < critic_policy.min_monthly_saving_usd:
-        checks.append(CriticCheck(
-            name="benefit",
-            code="INSIGNIFICANT_SAVINGS",
-            status=CheckStatus.TRIGGERED,
-            message=f"Monthly savings (${savings:.2f}) below threshold (${critic_policy.min_monthly_saving_usd:.2f}).",
-            evidence={"estimated_savings": savings, "min_required": critic_policy.min_monthly_saving_usd},
-        ))
-        return _build_result(
-            proposal, DecisionStatus.NO_CHANGE, RiskLevel.LOW,
-            "Estimated monthly savings are too small to justify workload redeployment.", checks,
-        )
-    checks.append(CriticCheck(
-        name="benefit",
-        code="SAVINGS_THRESHOLD_MET",
-        status=CheckStatus.PASSED,
-        message=f"Projected savings (${savings:.2f}/mo) meet minimum economic threshold.",
-    ))
-
-    return _build_result(
-        proposal, DecisionStatus.APPROVED, RiskLevel.LOW,
-        "Proposal passed all safety, event, incident, and headroom checks.", checks,
-        yaml_patch=_generate_yaml_patch(proposal), monthly_savings=savings,
-    )
-
-_MEMORY_RE = re.compile(r"\bmemory\b|\boom")
-_CPU_RE = re.compile(r"\bcpu\b|throttl")
-_EPS = 1e-6
+# Check statuses, shortened: these appear in almost every rule below.
 T, P, S = CheckStatus.TRIGGERED, CheckStatus.PASSED, CheckStatus.SKIPPED
 
+# Which resource a log line is about, when it names one ("Memory limit reached" / "CPU throttling").
+_MEMORY_RE = re.compile(r"\bmemory\b|\boom")
+_CPU_RE = re.compile(r"\bcpu\b|throttl")
+
+# Tolerance for float comparisons of request sizes, which are integers in practice.
+_EPS = 1e-6
 
 
 def _aware(dt: datetime) -> datetime:
@@ -337,17 +196,17 @@ def check_floor(proposal: OptimizationProposal, bundle: InputBundle) -> CriticCh
     memory_reduced = (p.memory_request_mib is not None and
                       (proposal.current.memory_request_mib is None or
                        p.memory_request_mib < proposal.current.memory_request_mib - _EPS))
-    if cpu_reduced and p.cpu_request_millicores < cpu_floor - _EPS:
+    if cpu_reduced and p.cpu_request_millicores is not None and p.cpu_request_millicores < cpu_floor - _EPS:
         breaches.append(f"CPU {p.cpu_request_millicores} m < floor {cpu_floor:.0f} m "
                         f"({pol.cpu_floor_p99_multiplier:g} × p99 {m.cpu_p99:.0f} m)")
     elif not cpu_reduced and p.cpu_request_millicores is not None and p.cpu_request_millicores < cpu_floor - _EPS:
         unchanged_gaps.append(f"CPU remains {p.cpu_request_millicores} m below the {cpu_floor:.0f} m floor")
-    if memory_reduced and p.memory_request_mib < mem_floor - _EPS:
+    if memory_reduced and p.memory_request_mib is not None and p.memory_request_mib < mem_floor - _EPS:
         breaches.append(f"memory {p.memory_request_mib} MiB < floor {mem_floor:.0f} MiB "
                         f"({pol.memory_floor_p99_multiplier:g} × p99 {m.memory_p99:.0f} MiB)")
     elif not memory_reduced and p.memory_request_mib is not None and p.memory_request_mib < mem_floor - _EPS:
         unchanged_gaps.append(f"memory remains {p.memory_request_mib} MiB below the {mem_floor:.0f} MiB floor")
-    ev = dict(cpu_floor_m=round(cpu_floor, 1), memory_floor_mib=round(mem_floor, 1), cpu_p99=m.cpu_p99, memory_p99=m.memory_p99,
+    ev: dict[str, Any] = dict(cpu_floor_m=round(cpu_floor, 1), memory_floor_mib=round(mem_floor, 1), cpu_p99=m.cpu_p99, memory_p99=m.memory_p99,
               proposed_cpu_m=p.cpu_request_millicores, proposed_memory_mib=p.memory_request_mib,
               reduced_resources=[name for name, reduced in (("cpu", cpu_reduced), ("memory", memory_reduced)) if reduced],
               unchanged_floor_gaps=unchanged_gaps)
