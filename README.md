@@ -78,11 +78,18 @@ curl -s 'localhost:8000/api/report?format=markdown' | head -40
 
 ## Samples
 
-Three inputs and their real outputs, captured from `SAMPLE_MODE=true`.
+Three distinct sample inputs/scenarios and outputs are shown below. The first two API examples use
+`SAMPLE_MODE=true`; the third is a deterministic conformance scenario. Each entry says whether a
+language model handled it. The `docs-renderer` result is a detail from the first report, not a
+separate run.
 
-**1. The whole review** — `POST /api/analyze` with `{"mode":"agent"}`:
+**1. Full review** — `POST /api/analyze`:
 
 ```json
+// input
+{"mode": "agent"}
+
+// output summary
 {
   "workloads_evaluated": 12,
   "approved": 4,
@@ -94,7 +101,10 @@ Three inputs and their real outputs, captured from `SAMPLE_MODE=true`.
 }
 ```
 
-**2. One workload from that report** — `results[?workload_id='docs-renderer']`:
+Model: `llm_backend: "simulated"`, `llm_model: null`. `SAMPLE_MODE=true` selects the deterministic
+stand-in; no language model is called.
+
+**Report detail from sample 1** — `results[?workload_id='docs-renderer']`:
 
 ```json
 {
@@ -110,9 +120,10 @@ Three inputs and their real outputs, captured from `SAMPLE_MODE=true`.
 ```
 
 Memory is untouched: the review objected to lowering it (the workload was OOMKilled) and the
-proposer narrowed the change to CPU only. The trace below is how that happened.
+proposer narrowed the change to CPU only. The trace below shows how that happened. This result has
+the same model attribution as sample 1.
 
-**3. A what-if** — `POST /api/simulate`:
+**2. What-if request** — `POST /api/simulate`:
 
 ```json
 // input
@@ -129,6 +140,35 @@ proposer narrowed the change to CPU only. The trace below is how that happened.
   "label": "Simulation only — not the official report. Nothing was saved or applied."
 }
 ```
+
+Model: none. The what-if endpoint uses the deterministic critic and does not call the language
+model.
+
+**3. Active event-freeze conformance case** — input from `data/test_scenarios.json`, evaluated by
+`python scripts/evaluate_scenarios.py`:
+
+```json
+// input
+{
+  "id": "SCN-03",
+  "name": "Active business event freeze",
+  "workload": "recommendation-api",
+  "timestamp": "2026-09-16T02:00:00Z",
+  "expected_outcome": "defer"
+}
+
+// output from the conformance check
+{"actual_decision": "deferred", "result": "PASS"}
+```
+
+Model: none. This conformance check runs the deterministic optimizer and critic, not the agent/model
+cycle.
+
+For a live-model run, the response records `llm_backend: "openai-compatible"` and the actual
+`llm_model`; see the model attribution table under [Traces](#traces).
+
+`SAMPLE_MODE=true` selects local fixtures and the stand-in together, so examples produced in this
+mode do not contact Zetaris or Nightshift.
 
 ## Traces
 
