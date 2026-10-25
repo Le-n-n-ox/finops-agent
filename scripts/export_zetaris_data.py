@@ -24,7 +24,10 @@ def write_csv(name: str, fields: list[str], rows: list[dict[str, Any]]) -> None:
 def main() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
 
-    workloads = json.loads((DATA / "workloads.json").read_text(encoding="utf-8"))
+    workloads_raw = json.loads((DATA / "workloads.json").read_text(encoding="utf-8"))
+    # The fixture is a Zetaris-shaped response ({"value": [...], "Count": n}), not a bare list:
+    # it is what the connector's query returns. Accept either so the export survives both.
+    workloads = workloads_raw.get("value", workloads_raw) if isinstance(workloads_raw, dict) else workloads_raw
     deployment_fields = [
         "name", "namespace", "replicas", "cpu_request_millicores", "cpu_limit_millicores",
         "memory_request_mib", "memory_limit_mib", "criticality", "protected",

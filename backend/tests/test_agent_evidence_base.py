@@ -103,12 +103,12 @@ class TestTheEvidenceIsAlwaysRetrieved:
     def test_a_workload_with_no_pressure_logs_raises_no_log_objection(self, bundle):
         """The fix must not raise objections that the evidence does not support."""
         client = ScriptedClient([
-            {"tool_call": _tool("analyze_rightsizing", workload_id="docs-renderer")},
+            {"tool_call": _tool("analyze_rightsizing", workload_id="image-resizer")},
             {"tool_call": _tool("validate_policy")},
             {"content": "done", "conclusion": True},
         ])
         orchestrator = AgentOrchestrator(bundle, client)
-        result, _audit = asyncio.run(orchestrator.analyze_workload_agentic("docs-renderer"))
+        result, _audit = asyncio.run(orchestrator.analyze_workload_agentic("image-resizer"))
 
         codes = {o.code for o in result.objections}
         assert "LOG_PRESSURE_IGNORED" not in codes, f"an unsupported objection was raised: {codes}"

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import re
 from typing import Any, Dict, List
 
@@ -30,15 +31,21 @@ class SimulatedLLMClient:
                    history: List[Dict[str, Any]]) -> LLMResponse:
         self.call_count += 1
 
-        # The orchestrator's system prompt tells us which role is speaking.
-        if "adversarial reviewer" in system.lower():
+        # The orchestrator's system prompt tells us which role is speaking. The revision prompt is
+        # checked first: it quotes the reviewer's objections, so a substring test for "adversarial
+        # reviewer" would otherwise classify it as a critic turn.
+        if "blocking objections that you have not answered" in system.lower():
+            self.phase = "revision"
+        elif "adversarial reviewer" in system.lower():
             self.phase = "critic"
         elif "final judge" in system.lower():
             self.phase = "judge"
         else:
             self.phase = "proposer"
 
-        if self.phase == "critic":
+        if self.phase == "revision":
+            response = self._revision_turn(user)
+        elif self.phase == "critic":
             response = self._critic_turn(user, tools, history)
         elif self.phase == "judge":
             response = self._judge_turn(user)
@@ -156,25 +163,29 @@ class SimulatedLLMClient:
                 "conclusion": True,
             }
 
-        # Path 4: The "Data Quality" path (not enough data)
+        # Path 4: the default path. It gathers the evidence and hands it to the critic; it does not
+        # claim a data verdict it cannot know - the deterministic critic owns that, and a stand-in
+        # line saying "insufficient data" over an approved proposal reads as a contradiction in
+        # the audit trail.
         if made == 0:
             return {
-                "thought": f"Investigating {workload_id}. Checking data health first.",
+                "thought": f"Investigating {workload_id}. Checking usage before anything else.",
                 "tool_call": {"name": "get_workload_metrics", "arguments": {"workload_id": workload_id}},
                 "content": None,
                 "conclusion": False,
             }
         if made == 1:
             return {
-                "thought": "Checking the deterministic right-sizing result to confirm the data quality verdict.",
+                "thought": "The usage summary is in hand. Computing the deterministic right-sizing proposal.",
                 "tool_call": {"name": "analyze_rightsizing", "arguments": {"workload_id": workload_id}},
                 "content": None,
                 "conclusion": False,
             }
         return {
-            "thought": "Sample count is too low for a confident recommendation. Validating against policy anyway.",
+            "thought": "The evidence is gathered. Handing the proposal to the deterministic critic.",
             "tool_call": {"name": "validate_policy", "arguments": {}},
-            "content": f"Analysis for {workload_id}: insufficient data to make a safe recommendation.",
+            "content": (f"Analysis for {workload_id}: usage summary and right-sizing result gathered; "
+                        f"the proposal is with the policy critic."),
             "conclusion": True,
         }
 
@@ -211,6 +222,30 @@ class SimulatedLLMClient:
             "tool_call": {"name": "validate_policy", "arguments": {}},
             "content": (f"Adversarial review of {workload_id}: checked logs, incident history and dependencies "
                         f"against the proposer's case."),
+            "conclusion": True,
+        }
+
+    # ------------------------------------------------------------------ revision
+    def _revision_turn(self, user: str) -> LLMResponse:
+        """Answer the objections the way the evidence points: give up the contested resource.
+
+        Only the objections are read, not the whole prompt: the current/proposed figures mention
+        both resources on every turn, so scanning the whole text would always answer "memory".
+        """
+        objections = user.split("Blocking objections:", 1)[-1].lower()
+        if "memory" in objections:
+            action, resource = "narrow", "cpu"
+            reason = "The memory objection stands, so keep the CPU reduction only."
+        elif "cpu" in objections:
+            action, resource = "narrow", "memory"
+            reason = "The CPU objection stands, so keep the memory reduction only."
+        else:
+            action, resource = "keep", None
+            reason = "The objection is already answered by the evidence, so the change stands."
+        return {
+            "thought": "Answering the objections the reviewer raised.",
+            "tool_call": None,
+            "content": json.dumps({"action": action, "resource": resource, "reason": reason}),
             "conclusion": True,
         }
 

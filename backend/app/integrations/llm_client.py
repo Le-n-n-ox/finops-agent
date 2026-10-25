@@ -25,7 +25,7 @@ import socket
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from typing import Any, Dict, List, NotRequired, Optional, Tuple, TypedDict
 
 import httpx
 
@@ -92,7 +92,9 @@ class LLMResponse(TypedDict):
     tool_call: Optional[Dict[str, Any]]
     thought: Optional[str]
     conclusion: bool
-    tool_call_id: Optional[str]
+    # Optional because a client mints one when the provider sent none: the stand-in has no
+    # provider at all, and a real server does not always echo an id back.
+    tool_call_id: NotRequired[Optional[str]]
 
 
 class LLMStatus(TypedDict):

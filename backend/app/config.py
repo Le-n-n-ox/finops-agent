@@ -55,3 +55,30 @@ def load_env() -> Path | None:
 
     loaded_from = ENV_FILE
     return ENV_FILE
+
+
+SAMPLE_MODE_VALUES = ("1", "true", "yes", "on")
+
+
+def sample_mode() -> bool:
+    """True when the run is pinned to local fixtures and the deterministic stand-in."""
+    return os.getenv("SAMPLE_MODE", "").strip().lower() in SAMPLE_MODE_VALUES
+
+
+def apply_sample_mode() -> bool:
+    """Switch every external dependency off, from one flag.
+
+    `DATA_SOURCE=local` and `LLM_BACKEND=simulated` already exist, but they are two settings in
+    two places, and a reviewer whose Zetaris tenant or Nightshift hotspot is unavailable should
+    not have to discover both. `SAMPLE_MODE=true` sets them, and it wins over whatever they said:
+    a sample run that half-applies - local data with a live model, or the reverse - is the one
+    outcome the flag exists to prevent.
+
+    It does not pretend: the response still carries `llm_backend: "simulated"` and the UI still
+    says no model answered.
+    """
+    if not sample_mode():
+        return False
+    os.environ["DATA_SOURCE"] = "local"
+    os.environ["LLM_BACKEND"] = "simulated"
+    return True

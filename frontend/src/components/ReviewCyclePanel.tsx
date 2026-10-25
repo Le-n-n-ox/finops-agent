@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 import type { ReviewCycle } from '@/types'
 
 /**
- * The Proposer -> Critic -> Judge review cycle, as it actually ran.
+ * The Proposer -> Critic -> Revision -> Judge review cycle, as it actually ran.
  *
  * Each phase is a real entry from the agent's audit log: the summary it produced, the tools it
  * called, and (for the Judge) the ruling. The phases are collapsible because the summary is the
@@ -23,6 +23,12 @@ const ROLE_META: Record<string, { label: string; icon: typeof Search; accent: st
     icon: ShieldQuestion,
     accent: 'text-amber-600 dark:text-amber-400',
     blurb: 'Red-teamed the proposal and raised grounded objections.',
+  },
+  revision: {
+    label: 'Revision',
+    icon: MessageSquareWarning,
+    accent: 'text-orange-600 dark:text-orange-400',
+    blurb: 'Answered the objections: conceded, narrowed the change, or stood by it.',
   },
   judge: {
     label: 'Judge',
@@ -129,7 +135,7 @@ export default function ReviewCyclePanel({ cycles, lessons }: { cycles?: ReviewC
   if (!cycles?.length) {
     return (
       <p className="rounded-md border border-dashed p-3 text-sm text-muted-foreground">
-        No review cycle recorded. Run the analysis to see the Proposer, Critic and Judge reasoning.
+        No review cycle recorded. Run the analysis to see the Proposer, Critic, Revision and Judge reasoning.
       </p>
     )
   }
