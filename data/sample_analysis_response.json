@@ -1,7 +1,7 @@
 {
   "analysis_id": "ANL-SAMPLE-0001",
   "generated_at": "2026-10-13T09:00:00+03:00",
-  "mode": "demo",
+  "mode": "agent",
   "summary": {
     "workloads_evaluated": 4,
     "approved": 1,
@@ -18,6 +18,115 @@
       "decision": "approved",
       "risk_level": "low",
       "reason": "All safety checks passed; patch is review-only.",
+      "confidence_score": 100.0,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics.",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=payment-api) -> proposal for 72 samples",
+        "get_incident_history(workload_id=payment-api) -> 0 record(s)",
+        "validate_policy(proposal_data={}) -> approved"
+      ],
+      "objections": [],
+      "cycles": [
+        {
+          "role": "proposer",
+          "summary": "Pulled 72 hourly samples and compared p99 against the request. Usage sits at 42% of the CPU request and 39% of the memory request, so the proposal targets p99 x 1.2 with a floor of 500 m / 2 GiB.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_workload_metrics",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "72 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "analyze_rightsizing",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "proposal for 72 samples",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": null,
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "critic",
+          "summary": "Red-teamed the proposal: no incident in the last 90 days, no business event inside the 48h risk window, and the proposed request stays above observed p99 x 1.2. No blocking objection found.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_incident_history",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "search_logs",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_dependencies",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "2 upstream service(s)",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "accept",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "judge",
+          "summary": "No objections to weigh. The deterministic critic approved the change, and the evidence behind it traces to tool results, so the decision stands.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "validate_policy",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "approved",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "approved",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        }
+      ],
+      "historical_lessons": [
+        "2026-09-18 \u2014 a human reviewer rejected a 25% memory reduction on payment-api: 'p99 was measured over a quiet weekend; keep the request at or above 2 GiB.' This proposal keeps memory at 2432 MiB, so it is consistent with that guidance."
+      ],
+      "rollout_guidance": {
+        "test_steps": [
+          "Apply to one replica of the payments deployment and watch for 30 minutes.",
+          "Promote to all replicas only if p99 stays below 70% of the new request."
+        ],
+        "watch_metrics": [
+          "Container CPU throttling rate",
+          "p99 CPU usage against the new request",
+          "Pod restarts and OOMKilled events"
+        ],
+        "rollback": "Revert by restoring the previous request values (CPU 1000 m, memory 4096 MiB); no data migration is involved."
+      },
       "checks": [
         {
           "name": "metrics_completeness",
@@ -62,7 +171,9 @@
         ],
         "warnings": [],
         "estimated_monthly_saving_usd": 18.9,
-        "created_at": "2026-10-13T09:00:00+03:00"
+        "created_at": "2026-10-13T09:00:00+03:00",
+        "suppressed_saving_usd": 0.0,
+        "suppressed_proposal": null
       },
       "monthly_savings_estimate_usd": 18.9,
       "yaml_patch": "# review-only patch (generated by Dev 2)"
@@ -73,6 +184,121 @@
       "decision": "deferred",
       "risk_level": "high",
       "reason": "High-impact event starts within risk window.",
+      "confidence_score": 46.0,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics; incident/event overlap; 1 blocking objection(s).",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=checkout-service) -> proposal for 72 samples",
+        "search_logs(workload_id=checkout-service) -> 1 record(s)",
+        "validate_policy(proposal_data={}) -> deferred"
+      ],
+      "objections": [
+        {
+          "code": "LOG_PRESSURE_IGNORED",
+          "severity": "blocking",
+          "message": "Log at 2026-10-14T09:00:00Z reports pressure: 'Memory limit reached. Container OOMKilled.' Reducing requests while the container is being OOMKilled risks an outage.",
+          "source": "search_logs"
+        }
+      ],
+      "cycles": [
+        {
+          "role": "proposer",
+          "summary": "Pulled 72 hourly samples and a dependency map. Usage percentiles sit well below the request, so a reduction to 640 m / 2560 MiB looks safe on paper.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_workload_metrics",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "72 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "analyze_rightsizing",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "proposal for 72 samples",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_dependencies",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "3 upstream service(s)",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": null,
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "critic",
+          "summary": "Red-teamed the proposal and found a blocking objection: the container was OOMKilled against its memory limit while the request was being reduced. The same pattern appears in a log six hours ago.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "search_logs",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "1 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_incident_history",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            }
+          ],
+          "objections": [
+            {
+              "code": "LOG_PRESSURE_IGNORED",
+              "severity": "blocking",
+              "message": "Log at 2026-10-14T09:00:00Z reports pressure: 'Memory limit reached. Container OOMKilled.' Reducing requests while the container is being OOMKilled risks an outage.",
+              "source": "search_logs"
+            }
+          ],
+          "verdict": "escalate",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "judge",
+          "summary": "Weighed the blocking objection against the proposal. The critic may only downgrade an approval, so the decision moves from approved to needs_review for a human to look at.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "validate_policy",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "deferred",
+              "thought": null
+            }
+          ],
+          "objections": [
+            {
+              "code": "LOG_PRESSURE_IGNORED",
+              "severity": "blocking",
+              "message": "Log at 2026-10-14T09:00:00Z reports pressure: 'Memory limit reached. Container OOMKilled.' Reducing requests while the container is being OOMKilled risks an outage.",
+              "source": "search_logs"
+            }
+          ],
+          "verdict": "escalate",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        }
+      ],
       "checks": [
         {
           "name": "event_window",
@@ -103,10 +329,7 @@
           "memory_request_mib": 4096,
           "memory_limit_mib": 6144
         },
-        "proposed": {
-          "cpu_request_millicores": 640,
-          "memory_request_mib": 2560
-        },
+        "proposed": null,
         "metrics": {
           "sample_count": 72,
           "span_hours": 71,
@@ -119,8 +342,13 @@
           "Usage percentiles below requests"
         ],
         "warnings": [],
-        "estimated_monthly_saving_usd": 17.5,
-        "created_at": "2026-10-13T09:00:00+03:00"
+        "estimated_monthly_saving_usd": 0.0,
+        "created_at": "2026-10-13T09:00:00+03:00",
+        "suppressed_saving_usd": 17.5,
+        "suppressed_proposal": {
+          "cpu_request_millicores": 640,
+          "memory_request_mib": 2560
+        }
       },
       "monthly_savings_estimate_usd": 0.0,
       "yaml_patch": null
@@ -131,6 +359,105 @@
       "decision": "needs_review",
       "risk_level": "medium",
       "reason": "Only 10 samples; evidence insufficient.",
+      "confidence_score": 30.0,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 10/24 samples; fresh metrics; 1 blocking objection(s).",
+      "evidence_trail": [
+        "get_workload_metrics(workload_id=email-worker) -> 10 record(s)",
+        "analyze_rightsizing(workload_id=email-worker) -> needs_review",
+        "validate_policy(proposal_data={}) -> needs_review"
+      ],
+      "objections": [
+        {
+          "code": "THIN_EVIDENCE",
+          "severity": "blocking",
+          "message": "Only 10 usage samples back this recommendation, below the required 24. The sample window is too small to distinguish a trend from noise.",
+          "source": "get_workload_metrics"
+        }
+      ],
+      "cycles": [
+        {
+          "role": "proposer",
+          "summary": "Fetched what metrics exist for email-worker. Only 10 hourly samples are available, which is below the 24-sample floor, so the proposer declines to size a request.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_workload_metrics",
+              "params": {
+                "workload_id": "email-worker"
+              },
+              "result": "10 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "analyze_rightsizing",
+              "params": {
+                "workload_id": "email-worker"
+              },
+              "result": "needs_review",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": null,
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "critic",
+          "summary": "Checked whether the thin sample could be argued around. It cannot: 10 points over 9 hours cannot separate a trend from noise, and the worker already has an open reliability question.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "search_logs",
+              "params": {
+                "workload_id": "email-worker"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_incident_history",
+              "params": {
+                "workload_id": "email-worker"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            }
+          ],
+          "objections": [
+            {
+              "code": "THIN_EVIDENCE",
+              "severity": "blocking",
+              "message": "Only 10 usage samples back this recommendation, below the required 24. The sample window is too small to distinguish a trend from noise.",
+              "source": "get_workload_metrics"
+            }
+          ],
+          "verdict": "escalate",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "judge",
+          "summary": "The objection is well grounded and the deterministic critic already refused to approve, so the decision is needs_review. More samples are the only way forward.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "validate_policy",
+              "params": {
+                "workload_id": "email-worker"
+              },
+              "result": "needs_review",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "needs_review",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        }
+      ],
       "checks": [
         {
           "name": "metrics_completeness",
@@ -144,7 +471,7 @@
         "proposal_id": "PRP-0003",
         "workload_id": "email-worker",
         "namespace": "jobs",
-        "status": "insufficient_data",
+        "status": "needs_review",
         "current": {
           "cpu_request_millicores": 500,
           "cpu_limit_millicores": 1500,
@@ -165,7 +492,9 @@
         ],
         "warnings": [],
         "estimated_monthly_saving_usd": 0.0,
-        "created_at": "2026-10-13T09:00:00+03:00"
+        "created_at": "2026-10-13T09:00:00+03:00",
+        "suppressed_saving_usd": 0.0,
+        "suppressed_proposal": null
       },
       "monthly_savings_estimate_usd": 0.0,
       "yaml_patch": null
@@ -176,6 +505,90 @@
       "decision": "no_change",
       "risk_level": "low",
       "reason": "No safe reduction identified.",
+      "confidence_score": 88.0,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics.",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=session-store) -> no_change",
+        "validate_policy(proposal_data={}) -> no_change"
+      ],
+      "objections": [],
+      "cycles": [
+        {
+          "role": "proposer",
+          "summary": "Pulled 72 hourly samples for session-store. Peak usage sits within 10% of the current request, so there is no meaningful headroom to give back.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_workload_metrics",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "72 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "analyze_rightsizing",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "no_change",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": null,
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "critic",
+          "summary": "Looked for a way to justify a change anyway and did not find one. The proposed reduction would fall below observed p99, which is exactly the case the critic refuses to approve.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "search_logs",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_incident_history",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "accept",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "judge",
+          "summary": "No change to rule on. The deterministic critic returned no_change, so the current allocation stays.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "validate_policy",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "no_change",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "no_change",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        }
+      ],
       "checks": [
         {
           "name": "benefit",
@@ -189,7 +602,7 @@
         "proposal_id": "PRP-0004",
         "workload_id": "session-store",
         "namespace": "core",
-        "status": "no_action",
+        "status": "no_change",
         "current": {
           "cpu_request_millicores": 500,
           "cpu_limit_millicores": 1000,
@@ -210,7 +623,9 @@
         ],
         "warnings": [],
         "estimated_monthly_saving_usd": 0.0,
-        "created_at": "2026-10-13T09:00:00+03:00"
+        "created_at": "2026-10-13T09:00:00+03:00",
+        "suppressed_saving_usd": 0.0,
+        "suppressed_proposal": null
       },
       "monthly_savings_estimate_usd": 0.0,
       "yaml_patch": null
@@ -218,5 +633,82 @@
   ],
   "warnings": [
     "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
-  ]
+  ],
+  "policy_version": "demo-1",
+  "rule_version": "rules-1",
+  "input_fingerprint": "sha256:sample0001fingerprint00000000000000000000000000000000000000000000",
+  "data_health": {
+    "generated_at": "2026-10-13T09:00:00+03:00",
+    "source": "local",
+    "workloads_checked": 4,
+    "error_count": 0,
+    "warning_count": 1,
+    "workloads": [
+      {
+        "workload_id": "payment-api",
+        "namespace": "payments",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71.0,
+        "required_span_hours": 24.0,
+        "latest_metric_age_hours": 1.0,
+        "max_metric_age_hours": 72.0,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      },
+      {
+        "workload_id": "checkout-service",
+        "namespace": "commerce",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71.0,
+        "required_span_hours": 24.0,
+        "latest_metric_age_hours": 1.0,
+        "max_metric_age_hours": 72.0,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      },
+      {
+        "workload_id": "email-worker",
+        "namespace": "jobs",
+        "sample_count": 10,
+        "required_samples": 24,
+        "span_hours": 9.0,
+        "required_span_hours": 24.0,
+        "latest_metric_age_hours": 1.0,
+        "max_metric_age_hours": 72.0,
+        "missing_metrics": false,
+        "sparse_metrics": true,
+        "stale_metrics": false,
+        "status": "warning"
+      },
+      {
+        "workload_id": "session-store",
+        "namespace": "core",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71.0,
+        "required_span_hours": 24.0,
+        "latest_metric_age_hours": 1.0,
+        "max_metric_age_hours": 72.0,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      }
+    ],
+    "issues": [
+      {
+        "severity": "warning",
+        "code": "SPARSE_METRICS",
+        "source": "usage_history",
+        "workload_id": "email-worker",
+        "message": "10 samples over 9.0 hours; need 24 samples over 24.0 hours."
+      }
+    ]
+  }
 }

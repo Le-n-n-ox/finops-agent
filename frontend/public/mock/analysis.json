@@ -1,0 +1,1872 @@
+{
+  "analysis_id": "ANL-SAMPLE-0001-all",
+  "generated_at": "2026-10-13T09:00:00+03:00",
+  "mode": "agent",
+  "summary": {
+    "workloads_evaluated": 4,
+    "approved": 1,
+    "deferred": 1,
+    "rejected": 0,
+    "needs_review": 1,
+    "no_change": 1,
+    "estimated_monthly_savings_usd": 18.9
+  },
+  "results": [
+    {
+      "workload_id": "payment-api",
+      "namespace": "payments",
+      "decision": "approved",
+      "risk_level": "low",
+      "reason": "All safety checks passed; patch is review-only.",
+      "confidence_score": 100,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics.",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=payment-api) -> proposal for 72 samples",
+        "get_incident_history(workload_id=payment-api) -> 0 record(s)",
+        "validate_policy(proposal_data={}) -> approved"
+      ],
+      "objections": [],
+      "cycles": [
+        {
+          "role": "proposer",
+          "summary": "Pulled 72 hourly samples and compared p99 against the request. Usage sits at 42% of the CPU request and 39% of the memory request, so the proposal targets p99 x 1.2 with a floor of 500 m / 2 GiB.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_workload_metrics",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "72 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "analyze_rightsizing",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "proposal for 72 samples",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": null,
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "critic",
+          "summary": "Red-teamed the proposal: no incident in the last 90 days, no business event inside the 48h risk window, and the proposed request stays above observed p99 x 1.2. No blocking objection found.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_incident_history",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "search_logs",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_dependencies",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "2 upstream service(s)",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "accept",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "judge",
+          "summary": "No objections to weigh. The deterministic critic approved the change, and the evidence behind it traces to tool results, so the decision stands.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "validate_policy",
+              "params": {
+                "workload_id": "payment-api"
+              },
+              "result": "approved",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "approved",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        }
+      ],
+      "historical_lessons": [
+        "2026-09-18 — a human reviewer rejected a 25% memory reduction on payment-api: 'p99 was measured over a quiet weekend; keep the request at or above 2 GiB.' This proposal keeps memory at 2432 MiB, so it is consistent with that guidance."
+      ],
+      "rollout_guidance": {
+        "test_steps": [
+          "Apply to one replica of the payments deployment and watch for 30 minutes.",
+          "Promote to all replicas only if p99 stays below 70% of the new request."
+        ],
+        "watch_metrics": [
+          "Container CPU throttling rate",
+          "p99 CPU usage against the new request",
+          "Pod restarts and OOMKilled events"
+        ],
+        "rollback": "Revert by restoring the previous request values (CPU 1000 m, memory 4096 MiB); no data migration is involved."
+      },
+      "checks": [
+        {
+          "name": "metrics_completeness",
+          "code": "OK",
+          "status": "passed",
+          "message": "72 hourly samples",
+          "evidence": {}
+        },
+        {
+          "name": "event_window",
+          "code": "NO_EVENT",
+          "status": "passed",
+          "message": "No event in 48h window",
+          "evidence": {}
+        }
+      ],
+      "proposal": {
+        "proposal_id": "PRP-0001",
+        "workload_id": "payment-api",
+        "namespace": "payments",
+        "status": "proposed",
+        "current": {
+          "cpu_request_millicores": 1000,
+          "cpu_limit_millicores": 2000,
+          "memory_request_mib": 4096,
+          "memory_limit_mib": 6144
+        },
+        "proposed": {
+          "cpu_request_millicores": 570,
+          "memory_request_mib": 2432
+        },
+        "metrics": {
+          "sample_count": 72,
+          "span_hours": 71,
+          "cpu_p95": 410,
+          "cpu_p99": 420,
+          "memory_p95": 1590,
+          "memory_p99": 1600
+        },
+        "reasons": [
+          "Usage percentiles well below requests"
+        ],
+        "warnings": [],
+        "estimated_monthly_saving_usd": 18.9,
+        "created_at": "2026-10-13T09:00:00+03:00",
+        "suppressed_saving_usd": 0,
+        "suppressed_proposal": null
+      },
+      "monthly_savings_estimate_usd": 18.9,
+      "yaml_patch": "# review-only patch (generated by Dev 2)",
+      "usage_series": [
+        {
+          "t": "2026-10-10T07:00:00.000Z",
+          "cpu": 352,
+          "mem": 1574
+        },
+        {
+          "t": "2026-10-10T08:00:00.000Z",
+          "cpu": 372,
+          "mem": 1582
+        },
+        {
+          "t": "2026-10-10T09:00:00.000Z",
+          "cpu": 388,
+          "mem": 1588
+        },
+        {
+          "t": "2026-10-10T10:00:00.000Z",
+          "cpu": 393,
+          "mem": 1590
+        },
+        {
+          "t": "2026-10-10T11:00:00.000Z",
+          "cpu": 408,
+          "mem": 1595
+        },
+        {
+          "t": "2026-10-10T12:00:00.000Z",
+          "cpu": 416,
+          "mem": 1598
+        },
+        {
+          "t": "2026-10-10T13:00:00.000Z",
+          "cpu": 412,
+          "mem": 1597
+        },
+        {
+          "t": "2026-10-10T14:00:00.000Z",
+          "cpu": 415,
+          "mem": 1598
+        },
+        {
+          "t": "2026-10-10T15:00:00.000Z",
+          "cpu": 406,
+          "mem": 1595
+        },
+        {
+          "t": "2026-10-10T16:00:00.000Z",
+          "cpu": 397,
+          "mem": 1591
+        },
+        {
+          "t": "2026-10-10T17:00:00.000Z",
+          "cpu": 381,
+          "mem": 1585
+        },
+        {
+          "t": "2026-10-10T18:00:00.000Z",
+          "cpu": 369,
+          "mem": 1581
+        },
+        {
+          "t": "2026-10-10T19:00:00.000Z",
+          "cpu": 352,
+          "mem": 1574
+        },
+        {
+          "t": "2026-10-10T20:00:00.000Z",
+          "cpu": 335,
+          "mem": 1568
+        },
+        {
+          "t": "2026-10-10T21:00:00.000Z",
+          "cpu": 322,
+          "mem": 1563
+        },
+        {
+          "t": "2026-10-10T22:00:00.000Z",
+          "cpu": 306,
+          "mem": 1557
+        },
+        {
+          "t": "2026-10-10T23:00:00.000Z",
+          "cpu": 302,
+          "mem": 1555
+        },
+        {
+          "t": "2026-10-11T00:00:00.000Z",
+          "cpu": 290,
+          "mem": 1550
+        },
+        {
+          "t": "2026-10-11T01:00:00.000Z",
+          "cpu": 289,
+          "mem": 1550
+        },
+        {
+          "t": "2026-10-11T02:00:00.000Z",
+          "cpu": 296,
+          "mem": 1553
+        },
+        {
+          "t": "2026-10-11T03:00:00.000Z",
+          "cpu": 302,
+          "mem": 1555
+        },
+        {
+          "t": "2026-10-11T04:00:00.000Z",
+          "cpu": 306,
+          "mem": 1557
+        },
+        {
+          "t": "2026-10-11T05:00:00.000Z",
+          "cpu": 323,
+          "mem": 1563
+        },
+        {
+          "t": "2026-10-11T06:00:00.000Z",
+          "cpu": 335,
+          "mem": 1567
+        },
+        {
+          "t": "2026-10-11T07:00:00.000Z",
+          "cpu": 356,
+          "mem": 1576
+        },
+        {
+          "t": "2026-10-11T08:00:00.000Z",
+          "cpu": 368,
+          "mem": 1580
+        },
+        {
+          "t": "2026-10-11T09:00:00.000Z",
+          "cpu": 380,
+          "mem": 1585
+        },
+        {
+          "t": "2026-10-11T10:00:00.000Z",
+          "cpu": 396,
+          "mem": 1591
+        },
+        {
+          "t": "2026-10-11T11:00:00.000Z",
+          "cpu": 407,
+          "mem": 1595
+        },
+        {
+          "t": "2026-10-11T12:00:00.000Z",
+          "cpu": 416,
+          "mem": 1598
+        },
+        {
+          "t": "2026-10-11T13:00:00.000Z",
+          "cpu": 416,
+          "mem": 1598
+        },
+        {
+          "t": "2026-10-11T14:00:00.000Z",
+          "cpu": 411,
+          "mem": 1596
+        },
+        {
+          "t": "2026-10-11T15:00:00.000Z",
+          "cpu": 408,
+          "mem": 1595
+        },
+        {
+          "t": "2026-10-11T16:00:00.000Z",
+          "cpu": 396,
+          "mem": 1591
+        },
+        {
+          "t": "2026-10-11T17:00:00.000Z",
+          "cpu": 383,
+          "mem": 1586
+        },
+        {
+          "t": "2026-10-11T18:00:00.000Z",
+          "cpu": 365,
+          "mem": 1579
+        },
+        {
+          "t": "2026-10-11T19:00:00.000Z",
+          "cpu": 356,
+          "mem": 1576
+        },
+        {
+          "t": "2026-10-11T20:00:00.000Z",
+          "cpu": 337,
+          "mem": 1568
+        },
+        {
+          "t": "2026-10-11T21:00:00.000Z",
+          "cpu": 317,
+          "mem": 1561
+        },
+        {
+          "t": "2026-10-11T22:00:00.000Z",
+          "cpu": 311,
+          "mem": 1559
+        },
+        {
+          "t": "2026-10-11T23:00:00.000Z",
+          "cpu": 297,
+          "mem": 1553
+        },
+        {
+          "t": "2026-10-12T00:00:00.000Z",
+          "cpu": 290,
+          "mem": 1551
+        },
+        {
+          "t": "2026-10-12T01:00:00.000Z",
+          "cpu": 286,
+          "mem": 1549
+        },
+        {
+          "t": "2026-10-12T02:00:00.000Z",
+          "cpu": 296,
+          "mem": 1553
+        },
+        {
+          "t": "2026-10-12T03:00:00.000Z",
+          "cpu": 297,
+          "mem": 1553
+        },
+        {
+          "t": "2026-10-12T04:00:00.000Z",
+          "cpu": 312,
+          "mem": 1559
+        },
+        {
+          "t": "2026-10-12T05:00:00.000Z",
+          "cpu": 324,
+          "mem": 1563
+        },
+        {
+          "t": "2026-10-12T06:00:00.000Z",
+          "cpu": 333,
+          "mem": 1567
+        },
+        {
+          "t": "2026-10-12T07:00:00.000Z",
+          "cpu": 352,
+          "mem": 1574
+        },
+        {
+          "t": "2026-10-12T08:00:00.000Z",
+          "cpu": 366,
+          "mem": 1580
+        },
+        {
+          "t": "2026-10-12T09:00:00.000Z",
+          "cpu": 388,
+          "mem": 1588
+        },
+        {
+          "t": "2026-10-12T10:00:00.000Z",
+          "cpu": 396,
+          "mem": 1591
+        },
+        {
+          "t": "2026-10-12T11:00:00.000Z",
+          "cpu": 408,
+          "mem": 1596
+        },
+        {
+          "t": "2026-10-12T12:00:00.000Z",
+          "cpu": 411,
+          "mem": 1597
+        },
+        {
+          "t": "2026-10-12T13:00:00.000Z",
+          "cpu": 417,
+          "mem": 1599
+        },
+        {
+          "t": "2026-10-12T14:00:00.000Z",
+          "cpu": 410,
+          "mem": 1596
+        },
+        {
+          "t": "2026-10-12T15:00:00.000Z",
+          "cpu": 405,
+          "mem": 1594
+        },
+        {
+          "t": "2026-10-12T16:00:00.000Z",
+          "cpu": 399,
+          "mem": 1592
+        },
+        {
+          "t": "2026-10-12T17:00:00.000Z",
+          "cpu": 386,
+          "mem": 1587
+        },
+        {
+          "t": "2026-10-12T18:00:00.000Z",
+          "cpu": 373,
+          "mem": 1582
+        },
+        {
+          "t": "2026-10-12T19:00:00.000Z",
+          "cpu": 350,
+          "mem": 1573
+        },
+        {
+          "t": "2026-10-12T20:00:00.000Z",
+          "cpu": 334,
+          "mem": 1567
+        },
+        {
+          "t": "2026-10-12T21:00:00.000Z",
+          "cpu": 323,
+          "mem": 1563
+        },
+        {
+          "t": "2026-10-12T22:00:00.000Z",
+          "cpu": 306,
+          "mem": 1557
+        },
+        {
+          "t": "2026-10-12T23:00:00.000Z",
+          "cpu": 294,
+          "mem": 1552
+        },
+        {
+          "t": "2026-10-13T00:00:00.000Z",
+          "cpu": 289,
+          "mem": 1550
+        },
+        {
+          "t": "2026-10-13T01:00:00.000Z",
+          "cpu": 288,
+          "mem": 1550
+        },
+        {
+          "t": "2026-10-13T02:00:00.000Z",
+          "cpu": 293,
+          "mem": 1552
+        },
+        {
+          "t": "2026-10-13T03:00:00.000Z",
+          "cpu": 297,
+          "mem": 1553
+        },
+        {
+          "t": "2026-10-13T04:00:00.000Z",
+          "cpu": 305,
+          "mem": 1556
+        },
+        {
+          "t": "2026-10-13T05:00:00.000Z",
+          "cpu": 322,
+          "mem": 1563
+        },
+        {
+          "t": "2026-10-13T06:00:00.000Z",
+          "cpu": 336,
+          "mem": 1568
+        }
+      ],
+      "events": []
+    },
+    {
+      "workload_id": "checkout-service",
+      "namespace": "commerce",
+      "decision": "deferred",
+      "risk_level": "high",
+      "reason": "High-impact event starts within risk window.",
+      "confidence_score": 46,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics; incident/event overlap; 1 blocking objection(s).",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=checkout-service) -> proposal for 72 samples",
+        "search_logs(workload_id=checkout-service) -> 1 record(s)",
+        "validate_policy(proposal_data={}) -> deferred"
+      ],
+      "objections": [
+        {
+          "code": "LOG_PRESSURE_IGNORED",
+          "severity": "blocking",
+          "message": "Log at 2026-10-14T09:00:00Z reports pressure: 'Memory limit reached. Container OOMKilled.' Reducing requests while the container is being OOMKilled risks an outage.",
+          "source": "search_logs"
+        }
+      ],
+      "cycles": [
+        {
+          "role": "proposer",
+          "summary": "Pulled 72 hourly samples and a dependency map. Usage percentiles sit well below the request, so a reduction to 640 m / 2560 MiB looks safe on paper.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_workload_metrics",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "72 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "analyze_rightsizing",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "proposal for 72 samples",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_dependencies",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "3 upstream service(s)",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": null,
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "critic",
+          "summary": "Red-teamed the proposal and found a blocking objection: the container was OOMKilled against its memory limit while the request was being reduced. The same pattern appears in a log six hours ago.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "search_logs",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "1 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_incident_history",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            }
+          ],
+          "objections": [
+            {
+              "code": "LOG_PRESSURE_IGNORED",
+              "severity": "blocking",
+              "message": "Log at 2026-10-14T09:00:00Z reports pressure: 'Memory limit reached. Container OOMKilled.' Reducing requests while the container is being OOMKilled risks an outage.",
+              "source": "search_logs"
+            }
+          ],
+          "verdict": "escalate",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "judge",
+          "summary": "Weighed the blocking objection against the proposal. The critic may only downgrade an approval, so the decision moves from approved to needs_review for a human to look at.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "validate_policy",
+              "params": {
+                "workload_id": "checkout-service"
+              },
+              "result": "deferred",
+              "thought": null
+            }
+          ],
+          "objections": [
+            {
+              "code": "LOG_PRESSURE_IGNORED",
+              "severity": "blocking",
+              "message": "Log at 2026-10-14T09:00:00Z reports pressure: 'Memory limit reached. Container OOMKilled.' Reducing requests while the container is being OOMKilled risks an outage.",
+              "source": "search_logs"
+            }
+          ],
+          "verdict": "escalate",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        }
+      ],
+      "checks": [
+        {
+          "name": "event_window",
+          "code": "HIGH_IMPACT_EVENT",
+          "status": "triggered",
+          "message": "Campaign starts in 23h",
+          "evidence": {
+            "event": "Major marketing campaign",
+            "start_at": "2026-10-14T08:00:00+03:00"
+          }
+        },
+        {
+          "name": "metrics_completeness",
+          "code": "OK",
+          "status": "passed",
+          "message": "72 hourly samples",
+          "evidence": {}
+        }
+      ],
+      "proposal": {
+        "proposal_id": "PRP-0002",
+        "workload_id": "checkout-service",
+        "namespace": "commerce",
+        "status": "proposed",
+        "current": {
+          "cpu_request_millicores": 1000,
+          "cpu_limit_millicores": 2000,
+          "memory_request_mib": 4096,
+          "memory_limit_mib": 6144
+        },
+        "proposed": null,
+        "metrics": {
+          "sample_count": 72,
+          "span_hours": 71,
+          "cpu_p95": 520,
+          "cpu_p99": 530,
+          "memory_p95": 1990,
+          "memory_p99": 2000
+        },
+        "reasons": [
+          "Usage percentiles below requests"
+        ],
+        "warnings": [],
+        "estimated_monthly_saving_usd": 0,
+        "created_at": "2026-10-13T09:00:00+03:00",
+        "suppressed_saving_usd": 17.5,
+        "suppressed_proposal": {
+          "cpu_request_millicores": 640,
+          "memory_request_mib": 2560
+        }
+      },
+      "monthly_savings_estimate_usd": 0,
+      "yaml_patch": null,
+      "usage_series": [
+        {
+          "t": "2026-10-10T07:00:00.000Z",
+          "cpu": 441,
+          "mem": 1966
+        },
+        {
+          "t": "2026-10-10T08:00:00.000Z",
+          "cpu": 462,
+          "mem": 1974
+        },
+        {
+          "t": "2026-10-10T09:00:00.000Z",
+          "cpu": 483,
+          "mem": 1982
+        },
+        {
+          "t": "2026-10-10T10:00:00.000Z",
+          "cpu": 497,
+          "mem": 1987
+        },
+        {
+          "t": "2026-10-10T11:00:00.000Z",
+          "cpu": 512,
+          "mem": 1993
+        },
+        {
+          "t": "2026-10-10T12:00:00.000Z",
+          "cpu": 526,
+          "mem": 1999
+        },
+        {
+          "t": "2026-10-10T13:00:00.000Z",
+          "cpu": 519,
+          "mem": 1996
+        },
+        {
+          "t": "2026-10-10T14:00:00.000Z",
+          "cpu": 524,
+          "mem": 1998
+        },
+        {
+          "t": "2026-10-10T15:00:00.000Z",
+          "cpu": 511,
+          "mem": 1993
+        },
+        {
+          "t": "2026-10-10T16:00:00.000Z",
+          "cpu": 497,
+          "mem": 1987
+        },
+        {
+          "t": "2026-10-10T17:00:00.000Z",
+          "cpu": 481,
+          "mem": 1982
+        },
+        {
+          "t": "2026-10-10T18:00:00.000Z",
+          "cpu": 466,
+          "mem": 1976
+        },
+        {
+          "t": "2026-10-10T19:00:00.000Z",
+          "cpu": 446,
+          "mem": 1968
+        },
+        {
+          "t": "2026-10-10T20:00:00.000Z",
+          "cpu": 429,
+          "mem": 1962
+        },
+        {
+          "t": "2026-10-10T21:00:00.000Z",
+          "cpu": 405,
+          "mem": 1953
+        },
+        {
+          "t": "2026-10-10T22:00:00.000Z",
+          "cpu": 392,
+          "mem": 1948
+        },
+        {
+          "t": "2026-10-10T23:00:00.000Z",
+          "cpu": 381,
+          "mem": 1944
+        },
+        {
+          "t": "2026-10-11T00:00:00.000Z",
+          "cpu": 364,
+          "mem": 1937
+        },
+        {
+          "t": "2026-10-11T01:00:00.000Z",
+          "cpu": 366,
+          "mem": 1938
+        },
+        {
+          "t": "2026-10-11T02:00:00.000Z",
+          "cpu": 372,
+          "mem": 1940
+        },
+        {
+          "t": "2026-10-11T03:00:00.000Z",
+          "cpu": 372,
+          "mem": 1940
+        },
+        {
+          "t": "2026-10-11T04:00:00.000Z",
+          "cpu": 386,
+          "mem": 1946
+        },
+        {
+          "t": "2026-10-11T05:00:00.000Z",
+          "cpu": 406,
+          "mem": 1953
+        },
+        {
+          "t": "2026-10-11T06:00:00.000Z",
+          "cpu": 419,
+          "mem": 1958
+        },
+        {
+          "t": "2026-10-11T07:00:00.000Z",
+          "cpu": 441,
+          "mem": 1966
+        },
+        {
+          "t": "2026-10-11T08:00:00.000Z",
+          "cpu": 463,
+          "mem": 1975
+        },
+        {
+          "t": "2026-10-11T09:00:00.000Z",
+          "cpu": 488,
+          "mem": 1984
+        },
+        {
+          "t": "2026-10-11T10:00:00.000Z",
+          "cpu": 499,
+          "mem": 1988
+        },
+        {
+          "t": "2026-10-11T11:00:00.000Z",
+          "cpu": 517,
+          "mem": 1995
+        },
+        {
+          "t": "2026-10-11T12:00:00.000Z",
+          "cpu": 519,
+          "mem": 1996
+        },
+        {
+          "t": "2026-10-11T13:00:00.000Z",
+          "cpu": 521,
+          "mem": 1997
+        },
+        {
+          "t": "2026-10-11T14:00:00.000Z",
+          "cpu": 525,
+          "mem": 1998
+        },
+        {
+          "t": "2026-10-11T15:00:00.000Z",
+          "cpu": 514,
+          "mem": 1994
+        },
+        {
+          "t": "2026-10-11T16:00:00.000Z",
+          "cpu": 499,
+          "mem": 1988
+        },
+        {
+          "t": "2026-10-11T17:00:00.000Z",
+          "cpu": 485,
+          "mem": 1983
+        },
+        {
+          "t": "2026-10-11T18:00:00.000Z",
+          "cpu": 464,
+          "mem": 1975
+        },
+        {
+          "t": "2026-10-11T19:00:00.000Z",
+          "cpu": 442,
+          "mem": 1967
+        },
+        {
+          "t": "2026-10-11T20:00:00.000Z",
+          "cpu": 426,
+          "mem": 1961
+        },
+        {
+          "t": "2026-10-11T21:00:00.000Z",
+          "cpu": 403,
+          "mem": 1952
+        },
+        {
+          "t": "2026-10-11T22:00:00.000Z",
+          "cpu": 389,
+          "mem": 1947
+        },
+        {
+          "t": "2026-10-11T23:00:00.000Z",
+          "cpu": 374,
+          "mem": 1941
+        },
+        {
+          "t": "2026-10-12T00:00:00.000Z",
+          "cpu": 366,
+          "mem": 1938
+        },
+        {
+          "t": "2026-10-12T01:00:00.000Z",
+          "cpu": 363,
+          "mem": 1937
+        },
+        {
+          "t": "2026-10-12T02:00:00.000Z",
+          "cpu": 365,
+          "mem": 1938
+        },
+        {
+          "t": "2026-10-12T03:00:00.000Z",
+          "cpu": 376,
+          "mem": 1942
+        },
+        {
+          "t": "2026-10-12T04:00:00.000Z",
+          "cpu": 389,
+          "mem": 1947
+        },
+        {
+          "t": "2026-10-12T05:00:00.000Z",
+          "cpu": 407,
+          "mem": 1954
+        },
+        {
+          "t": "2026-10-12T06:00:00.000Z",
+          "cpu": 423,
+          "mem": 1960
+        },
+        {
+          "t": "2026-10-12T07:00:00.000Z",
+          "cpu": 444,
+          "mem": 1968
+        },
+        {
+          "t": "2026-10-12T08:00:00.000Z",
+          "cpu": 466,
+          "mem": 1976
+        },
+        {
+          "t": "2026-10-12T09:00:00.000Z",
+          "cpu": 483,
+          "mem": 1982
+        },
+        {
+          "t": "2026-10-12T10:00:00.000Z",
+          "cpu": 507,
+          "mem": 1991
+        },
+        {
+          "t": "2026-10-12T11:00:00.000Z",
+          "cpu": 513,
+          "mem": 1993
+        },
+        {
+          "t": "2026-10-12T12:00:00.000Z",
+          "cpu": 519,
+          "mem": 1996
+        },
+        {
+          "t": "2026-10-12T13:00:00.000Z",
+          "cpu": 530,
+          "mem": 2000
+        },
+        {
+          "t": "2026-10-12T14:00:00.000Z",
+          "cpu": 520,
+          "mem": 1996
+        },
+        {
+          "t": "2026-10-12T15:00:00.000Z",
+          "cpu": 510,
+          "mem": 1992
+        },
+        {
+          "t": "2026-10-12T16:00:00.000Z",
+          "cpu": 499,
+          "mem": 1988
+        },
+        {
+          "t": "2026-10-12T17:00:00.000Z",
+          "cpu": 488,
+          "mem": 1984
+        },
+        {
+          "t": "2026-10-12T18:00:00.000Z",
+          "cpu": 470,
+          "mem": 1977
+        },
+        {
+          "t": "2026-10-12T19:00:00.000Z",
+          "cpu": 444,
+          "mem": 1967
+        },
+        {
+          "t": "2026-10-12T20:00:00.000Z",
+          "cpu": 426,
+          "mem": 1961
+        },
+        {
+          "t": "2026-10-12T21:00:00.000Z",
+          "cpu": 411,
+          "mem": 1955
+        },
+        {
+          "t": "2026-10-12T22:00:00.000Z",
+          "cpu": 394,
+          "mem": 1949
+        },
+        {
+          "t": "2026-10-12T23:00:00.000Z",
+          "cpu": 377,
+          "mem": 1942
+        },
+        {
+          "t": "2026-10-13T00:00:00.000Z",
+          "cpu": 373,
+          "mem": 1941
+        },
+        {
+          "t": "2026-10-13T01:00:00.000Z",
+          "cpu": 366,
+          "mem": 1938
+        },
+        {
+          "t": "2026-10-13T02:00:00.000Z",
+          "cpu": 370,
+          "mem": 1939
+        },
+        {
+          "t": "2026-10-13T03:00:00.000Z",
+          "cpu": 381,
+          "mem": 1944
+        },
+        {
+          "t": "2026-10-13T04:00:00.000Z",
+          "cpu": 393,
+          "mem": 1948
+        },
+        {
+          "t": "2026-10-13T05:00:00.000Z",
+          "cpu": 408,
+          "mem": 1954
+        },
+        {
+          "t": "2026-10-13T06:00:00.000Z",
+          "cpu": 425,
+          "mem": 1960
+        }
+      ],
+      "events": [
+        {
+          "name": "Black Friday Preview Campaign",
+          "start_at": "2026-10-14T05:00:00.000Z",
+          "end_at": "2026-10-14T17:00:00.000Z",
+          "risk": "high"
+        }
+      ]
+    },
+    {
+      "workload_id": "email-worker",
+      "namespace": "jobs",
+      "decision": "needs_review",
+      "risk_level": "medium",
+      "reason": "Only 10 samples; evidence insufficient.",
+      "confidence_score": 30,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 10/24 samples; fresh metrics; 1 blocking objection(s).",
+      "evidence_trail": [
+        "get_workload_metrics(workload_id=email-worker) -> 10 record(s)",
+        "analyze_rightsizing(workload_id=email-worker) -> needs_review",
+        "validate_policy(proposal_data={}) -> needs_review"
+      ],
+      "objections": [
+        {
+          "code": "THIN_EVIDENCE",
+          "severity": "blocking",
+          "message": "Only 10 usage samples back this recommendation, below the required 24. The sample window is too small to distinguish a trend from noise.",
+          "source": "get_workload_metrics"
+        }
+      ],
+      "cycles": [
+        {
+          "role": "proposer",
+          "summary": "Fetched what metrics exist for email-worker. Only 10 hourly samples are available, which is below the 24-sample floor, so the proposer declines to size a request.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_workload_metrics",
+              "params": {
+                "workload_id": "email-worker"
+              },
+              "result": "10 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "analyze_rightsizing",
+              "params": {
+                "workload_id": "email-worker"
+              },
+              "result": "needs_review",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": null,
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "critic",
+          "summary": "Checked whether the thin sample could be argued around. It cannot: 10 points over 9 hours cannot separate a trend from noise, and the worker already has an open reliability question.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "search_logs",
+              "params": {
+                "workload_id": "email-worker"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_incident_history",
+              "params": {
+                "workload_id": "email-worker"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            }
+          ],
+          "objections": [
+            {
+              "code": "THIN_EVIDENCE",
+              "severity": "blocking",
+              "message": "Only 10 usage samples back this recommendation, below the required 24. The sample window is too small to distinguish a trend from noise.",
+              "source": "get_workload_metrics"
+            }
+          ],
+          "verdict": "escalate",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "judge",
+          "summary": "The objection is well grounded and the deterministic critic already refused to approve, so the decision is needs_review. More samples are the only way forward.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "validate_policy",
+              "params": {
+                "workload_id": "email-worker"
+              },
+              "result": "needs_review",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "needs_review",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        }
+      ],
+      "checks": [
+        {
+          "name": "metrics_completeness",
+          "code": "INSUFFICIENT_SAMPLES",
+          "status": "triggered",
+          "message": "10 < 24 samples",
+          "evidence": {}
+        }
+      ],
+      "proposal": {
+        "proposal_id": "PRP-0003",
+        "workload_id": "email-worker",
+        "namespace": "jobs",
+        "status": "needs_review",
+        "current": {
+          "cpu_request_millicores": 500,
+          "cpu_limit_millicores": 1500,
+          "memory_request_mib": 2048,
+          "memory_limit_mib": 3072
+        },
+        "proposed": null,
+        "metrics": {
+          "sample_count": 10,
+          "span_hours": 9,
+          "cpu_p95": null,
+          "cpu_p99": null,
+          "memory_p95": null,
+          "memory_p99": null
+        },
+        "reasons": [
+          "Need >= 24 samples and >= 24h span"
+        ],
+        "warnings": [],
+        "estimated_monthly_saving_usd": 0,
+        "created_at": "2026-10-13T09:00:00+03:00",
+        "suppressed_saving_usd": 0,
+        "suppressed_proposal": null
+      },
+      "monthly_savings_estimate_usd": 0,
+      "yaml_patch": null,
+      "usage_series": [
+        {
+          "t": "2026-10-08T21:00:00.000Z",
+          "cpu": 168,
+          "mem": 806
+        },
+        {
+          "t": "2026-10-08T22:00:00.000Z",
+          "cpu": 177,
+          "mem": 810
+        },
+        {
+          "t": "2026-10-08T23:00:00.000Z",
+          "cpu": 183,
+          "mem": 812
+        },
+        {
+          "t": "2026-10-09T00:00:00.000Z",
+          "cpu": 190,
+          "mem": 815
+        },
+        {
+          "t": "2026-10-09T01:00:00.000Z",
+          "cpu": 196,
+          "mem": 818
+        },
+        {
+          "t": "2026-10-09T02:00:00.000Z",
+          "cpu": 199,
+          "mem": 819
+        },
+        {
+          "t": "2026-10-09T03:00:00.000Z",
+          "cpu": 198,
+          "mem": 818
+        },
+        {
+          "t": "2026-10-09T04:00:00.000Z",
+          "cpu": 198,
+          "mem": 818
+        },
+        {
+          "t": "2026-10-09T05:00:00.000Z",
+          "cpu": 195,
+          "mem": 817
+        },
+        {
+          "t": "2026-10-09T06:00:00.000Z",
+          "cpu": 187,
+          "mem": 814
+        }
+      ],
+      "events": []
+    },
+    {
+      "workload_id": "session-store",
+      "namespace": "core",
+      "decision": "no_change",
+      "risk_level": "low",
+      "reason": "No safe reduction identified.",
+      "confidence_score": 88,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics.",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=session-store) -> no_change",
+        "validate_policy(proposal_data={}) -> no_change"
+      ],
+      "objections": [],
+      "cycles": [
+        {
+          "role": "proposer",
+          "summary": "Pulled 72 hourly samples for session-store. Peak usage sits within 10% of the current request, so there is no meaningful headroom to give back.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_workload_metrics",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "72 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "analyze_rightsizing",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "no_change",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": null,
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "critic",
+          "summary": "Looked for a way to justify a change anyway and did not find one. The proposed reduction would fall below observed p99, which is exactly the case the critic refuses to approve.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "search_logs",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_incident_history",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "accept",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "judge",
+          "summary": "No change to rule on. The deterministic critic returned no_change, so the current allocation stays.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "validate_policy",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "no_change",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "no_change",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        }
+      ],
+      "checks": [
+        {
+          "name": "benefit",
+          "code": "BELOW_THRESHOLD",
+          "status": "triggered",
+          "message": "Reduction < 15%",
+          "evidence": {}
+        }
+      ],
+      "proposal": {
+        "proposal_id": "PRP-0004",
+        "workload_id": "session-store",
+        "namespace": "core",
+        "status": "no_change",
+        "current": {
+          "cpu_request_millicores": 500,
+          "cpu_limit_millicores": 1000,
+          "memory_request_mib": 1024,
+          "memory_limit_mib": 2048
+        },
+        "proposed": null,
+        "metrics": {
+          "sample_count": 72,
+          "span_hours": 71,
+          "cpu_p95": 470,
+          "cpu_p99": 480,
+          "memory_p95": 910,
+          "memory_p99": 920
+        },
+        "reasons": [
+          "Peak usage near current request"
+        ],
+        "warnings": [],
+        "estimated_monthly_saving_usd": 0,
+        "created_at": "2026-10-13T09:00:00+03:00",
+        "suppressed_saving_usd": 0,
+        "suppressed_proposal": null
+      },
+      "monthly_savings_estimate_usd": 0,
+      "yaml_patch": null,
+      "usage_series": [
+        {
+          "t": "2026-10-10T07:00:00.000Z",
+          "cpu": 404,
+          "mem": 905
+        },
+        {
+          "t": "2026-10-10T08:00:00.000Z",
+          "cpu": 425,
+          "mem": 909
+        },
+        {
+          "t": "2026-10-10T09:00:00.000Z",
+          "cpu": 441,
+          "mem": 913
+        },
+        {
+          "t": "2026-10-10T10:00:00.000Z",
+          "cpu": 459,
+          "mem": 916
+        },
+        {
+          "t": "2026-10-10T11:00:00.000Z",
+          "cpu": 465,
+          "mem": 917
+        },
+        {
+          "t": "2026-10-10T12:00:00.000Z",
+          "cpu": 475,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-10T13:00:00.000Z",
+          "cpu": 474,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-10T14:00:00.000Z",
+          "cpu": 469,
+          "mem": 918
+        },
+        {
+          "t": "2026-10-10T15:00:00.000Z",
+          "cpu": 466,
+          "mem": 917
+        },
+        {
+          "t": "2026-10-10T16:00:00.000Z",
+          "cpu": 457,
+          "mem": 916
+        },
+        {
+          "t": "2026-10-10T17:00:00.000Z",
+          "cpu": 436,
+          "mem": 912
+        },
+        {
+          "t": "2026-10-10T18:00:00.000Z",
+          "cpu": 425,
+          "mem": 909
+        },
+        {
+          "t": "2026-10-10T19:00:00.000Z",
+          "cpu": 402,
+          "mem": 905
+        },
+        {
+          "t": "2026-10-10T20:00:00.000Z",
+          "cpu": 382,
+          "mem": 901
+        },
+        {
+          "t": "2026-10-10T21:00:00.000Z",
+          "cpu": 363,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-10T22:00:00.000Z",
+          "cpu": 351,
+          "mem": 895
+        },
+        {
+          "t": "2026-10-10T23:00:00.000Z",
+          "cpu": 337,
+          "mem": 893
+        },
+        {
+          "t": "2026-10-11T00:00:00.000Z",
+          "cpu": 333,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-11T01:00:00.000Z",
+          "cpu": 336,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-11T02:00:00.000Z",
+          "cpu": 335,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-11T03:00:00.000Z",
+          "cpu": 337,
+          "mem": 893
+        },
+        {
+          "t": "2026-10-11T04:00:00.000Z",
+          "cpu": 349,
+          "mem": 895
+        },
+        {
+          "t": "2026-10-11T05:00:00.000Z",
+          "cpu": 363,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-11T06:00:00.000Z",
+          "cpu": 382,
+          "mem": 901
+        },
+        {
+          "t": "2026-10-11T07:00:00.000Z",
+          "cpu": 400,
+          "mem": 905
+        },
+        {
+          "t": "2026-10-11T08:00:00.000Z",
+          "cpu": 423,
+          "mem": 909
+        },
+        {
+          "t": "2026-10-11T09:00:00.000Z",
+          "cpu": 444,
+          "mem": 913
+        },
+        {
+          "t": "2026-10-11T10:00:00.000Z",
+          "cpu": 458,
+          "mem": 916
+        },
+        {
+          "t": "2026-10-11T11:00:00.000Z",
+          "cpu": 461,
+          "mem": 916
+        },
+        {
+          "t": "2026-10-11T12:00:00.000Z",
+          "cpu": 469,
+          "mem": 918
+        },
+        {
+          "t": "2026-10-11T13:00:00.000Z",
+          "cpu": 476,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-11T14:00:00.000Z",
+          "cpu": 473,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-11T15:00:00.000Z",
+          "cpu": 461,
+          "mem": 916
+        },
+        {
+          "t": "2026-10-11T16:00:00.000Z",
+          "cpu": 451,
+          "mem": 914
+        },
+        {
+          "t": "2026-10-11T17:00:00.000Z",
+          "cpu": 438,
+          "mem": 912
+        },
+        {
+          "t": "2026-10-11T18:00:00.000Z",
+          "cpu": 426,
+          "mem": 910
+        },
+        {
+          "t": "2026-10-11T19:00:00.000Z",
+          "cpu": 399,
+          "mem": 904
+        },
+        {
+          "t": "2026-10-11T20:00:00.000Z",
+          "cpu": 383,
+          "mem": 901
+        },
+        {
+          "t": "2026-10-11T21:00:00.000Z",
+          "cpu": 366,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-11T22:00:00.000Z",
+          "cpu": 351,
+          "mem": 895
+        },
+        {
+          "t": "2026-10-11T23:00:00.000Z",
+          "cpu": 336,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-12T00:00:00.000Z",
+          "cpu": 331,
+          "mem": 891
+        },
+        {
+          "t": "2026-10-12T01:00:00.000Z",
+          "cpu": 329,
+          "mem": 891
+        },
+        {
+          "t": "2026-10-12T02:00:00.000Z",
+          "cpu": 335,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-12T03:00:00.000Z",
+          "cpu": 339,
+          "mem": 893
+        },
+        {
+          "t": "2026-10-12T04:00:00.000Z",
+          "cpu": 354,
+          "mem": 896
+        },
+        {
+          "t": "2026-10-12T05:00:00.000Z",
+          "cpu": 363,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-12T06:00:00.000Z",
+          "cpu": 387,
+          "mem": 902
+        },
+        {
+          "t": "2026-10-12T07:00:00.000Z",
+          "cpu": 407,
+          "mem": 906
+        },
+        {
+          "t": "2026-10-12T08:00:00.000Z",
+          "cpu": 425,
+          "mem": 909
+        },
+        {
+          "t": "2026-10-12T09:00:00.000Z",
+          "cpu": 441,
+          "mem": 912
+        },
+        {
+          "t": "2026-10-12T10:00:00.000Z",
+          "cpu": 454,
+          "mem": 915
+        },
+        {
+          "t": "2026-10-12T11:00:00.000Z",
+          "cpu": 469,
+          "mem": 918
+        },
+        {
+          "t": "2026-10-12T12:00:00.000Z",
+          "cpu": 475,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-12T13:00:00.000Z",
+          "cpu": 472,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-12T14:00:00.000Z",
+          "cpu": 474,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-12T15:00:00.000Z",
+          "cpu": 465,
+          "mem": 917
+        },
+        {
+          "t": "2026-10-12T16:00:00.000Z",
+          "cpu": 450,
+          "mem": 914
+        },
+        {
+          "t": "2026-10-12T17:00:00.000Z",
+          "cpu": 441,
+          "mem": 913
+        },
+        {
+          "t": "2026-10-12T18:00:00.000Z",
+          "cpu": 421,
+          "mem": 909
+        },
+        {
+          "t": "2026-10-12T19:00:00.000Z",
+          "cpu": 400,
+          "mem": 905
+        },
+        {
+          "t": "2026-10-12T20:00:00.000Z",
+          "cpu": 380,
+          "mem": 901
+        },
+        {
+          "t": "2026-10-12T21:00:00.000Z",
+          "cpu": 366,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-12T22:00:00.000Z",
+          "cpu": 355,
+          "mem": 896
+        },
+        {
+          "t": "2026-10-12T23:00:00.000Z",
+          "cpu": 338,
+          "mem": 893
+        },
+        {
+          "t": "2026-10-13T00:00:00.000Z",
+          "cpu": 334,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-13T01:00:00.000Z",
+          "cpu": 329,
+          "mem": 891
+        },
+        {
+          "t": "2026-10-13T02:00:00.000Z",
+          "cpu": 331,
+          "mem": 891
+        },
+        {
+          "t": "2026-10-13T03:00:00.000Z",
+          "cpu": 343,
+          "mem": 894
+        },
+        {
+          "t": "2026-10-13T04:00:00.000Z",
+          "cpu": 350,
+          "mem": 895
+        },
+        {
+          "t": "2026-10-13T05:00:00.000Z",
+          "cpu": 364,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-13T06:00:00.000Z",
+          "cpu": 385,
+          "mem": 902
+        }
+      ],
+      "events": []
+    }
+  ],
+  "warnings": [
+    "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
+  ],
+  "policy_version": "demo-1",
+  "rule_version": "rules-1",
+  "input_fingerprint": "sha256:sample0001fingerprint00000000000000000000000000000000000000000000",
+  "data_health": {
+    "generated_at": "2026-10-13T09:00:00+03:00",
+    "source": "local",
+    "workloads_checked": 4,
+    "error_count": 0,
+    "warning_count": 1,
+    "workloads": [
+      {
+        "workload_id": "payment-api",
+        "namespace": "payments",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      },
+      {
+        "workload_id": "checkout-service",
+        "namespace": "commerce",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      },
+      {
+        "workload_id": "email-worker",
+        "namespace": "jobs",
+        "sample_count": 10,
+        "required_samples": 24,
+        "span_hours": 9,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": true,
+        "stale_metrics": false,
+        "status": "warning"
+      },
+      {
+        "workload_id": "session-store",
+        "namespace": "core",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      }
+    ],
+    "issues": [
+      {
+        "severity": "warning",
+        "code": "SPARSE_METRICS",
+        "source": "usage_history",
+        "workload_id": "email-worker",
+        "message": "10 samples over 9.0 hours; need 24 samples over 24.0 hours."
+      }
+    ]
+  },
+  "input_issues": [
+    {
+      "severity": "warning",
+      "code": "INSUFFICIENT_SAMPLES",
+      "message": "email-worker has 10 usage samples (minimum 24).",
+      "source": "usage_history.csv",
+      "workload_id": "email-worker"
+    }
+  ]
+}

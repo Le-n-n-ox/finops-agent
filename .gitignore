@@ -11,3 +11,13 @@ outputs/*
 !outputs/.gitkeep
 .DS_Store
 *.jar
+
+finops_history.sqlite3
+
+# SQLite temporary files
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# graphify knowledge graph (generated; rebuild with `graphify update .`)
+graphify-out/

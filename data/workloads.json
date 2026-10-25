@@ -1,0 +1,139 @@
+{
+    "value":  [
+                  {
+                      "name":  "payment-api",
+                      "namespace":  "payments",
+                      "replicas":  3,
+                      "cpu_request_millicores":  1000,
+                      "cpu_limit_millicores":  2000,
+                      "memory_request_mib":  4096,
+                      "memory_limit_mib":  6144,
+                      "criticality":  "critical",
+                      "protected":  true
+                  },
+                  {
+                      "name":  "checkout-service",
+                      "namespace":  "commerce",
+                      "replicas":  3,
+                      "cpu_request_millicores":  1000,
+                      "cpu_limit_millicores":  2000,
+                      "memory_request_mib":  4096,
+                      "memory_limit_mib":  6144,
+                      "criticality":  "critical",
+                      "protected":  true
+                  },
+                  {
+                      "name":  "email-worker",
+                      "namespace":  "jobs",
+                      "replicas":  2,
+                      "cpu_request_millicores":  500,
+                      "cpu_limit_millicores":  1500,
+                      "memory_request_mib":  2048,
+                      "memory_limit_mib":  3072,
+                      "criticality":  "low",
+                      "protected":  false
+                  },
+                  {
+                      "name":  "session-store",
+                      "namespace":  "core",
+                      "replicas":  2,
+                      "cpu_request_millicores":  500,
+                      "cpu_limit_millicores":  1000,
+                      "memory_request_mib":  1024,
+                      "memory_limit_mib":  2048,
+                      "criticality":  "critical",
+                      "protected":  true
+                  },
+                  {
+                      "name":  "recommendation-api",
+                      "namespace":  "ml",
+                      "replicas":  2,
+                      "cpu_request_millicores":  1500,
+                      "cpu_limit_millicores":  3000,
+                      "memory_request_mib":  8192,
+                      "memory_limit_mib":  12288,
+                      "criticality":  "medium",
+                      "protected":  false
+                  },
+                  {
+                      "name":  "image-resizer",
+                      "namespace":  "media",
+                      "replicas":  2,
+                      "cpu_request_millicores":  1000,
+                      "cpu_limit_millicores":  2000,
+                      "memory_request_mib":  4096,
+                      "memory_limit_mib":  6144,
+                      "criticality":  "low",
+                      "protected":  false
+                  },
+                  {
+                      "name":  "catalog-api",
+                      "namespace":  "commerce",
+                      "replicas":  3,
+                      "cpu_request_millicores":  750,
+                      "cpu_limit_millicores":  1500,
+                      "memory_request_mib":  2048,
+                      "memory_limit_mib":  4096,
+                      "criticality":  "medium",
+                      "protected":  false
+                  },
+                  {
+                      "name":  "analytics-batch",
+                      "namespace":  "analytics",
+                      "replicas":  1,
+                      "cpu_request_millicores":  2000,
+                      "cpu_limit_millicores":  4000,
+                      "memory_request_mib":  8192,
+                      "memory_limit_mib":  12288,
+                      "criticality":  "low",
+                      "protected":  false
+                  },
+                  {
+                      "name":  "auth-service",
+                      "namespace":  "identity",
+                      "replicas":  3,
+                      "cpu_request_millicores":  500,
+                      "cpu_limit_millicores":  1000,
+                      "memory_request_mib":  1024,
+                      "memory_limit_mib":  2048,
+                      "criticality":  "critical",
+                      "protected":  true
+                  },
+                  {
+                      "name":  "search-indexer",
+                      "namespace":  "search",
+                      "replicas":  2,
+                      "cpu_request_millicores":  1500,
+                      "cpu_limit_millicores":  3000,
+                      "memory_request_mib":  6144,
+                      "memory_limit_mib":  10240,
+                      "criticality":  "medium",
+                      "protected":  false
+                  },
+                  {
+                      "name":  "docs-renderer",
+                      "namespace":  "platform-tools",
+                      "replicas":  2,
+                      "cpu_request_millicores":  800,
+                      "cpu_limit_millicores":  1600,
+                      "memory_request_mib":  3072,
+                      "memory_limit_mib":  4096,
+                      "criticality":  "low",
+                      "protected":  false,
+                      "autoscaler_enabled":  true
+                  },
+                  {
+                      "name":  "queue-cleaner",
+                      "namespace":  "platform-tools",
+                      "replicas":  1,
+                      "cpu_request_millicores":  400,
+                      "cpu_limit_millicores":  800,
+                      "memory_request_mib":  2048,
+                      "memory_limit_mib":  3072,
+                      "criticality":  "low",
+                      "protected":  false,
+                      "autoscaler_enabled":  true
+                  }
+              ],
+    "Count":  12
+}

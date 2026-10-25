@@ -1,0 +1,32 @@
+[
+  {
+    "id": "all",
+    "label": "All workloads",
+    "description": "Mixed demo set"
+  },
+  {
+    "id": "normal",
+    "label": "Normal demand · low utilization",
+    "description": "Reduction approved"
+  },
+  {
+    "id": "event-risk",
+    "label": "High-impact event ahead",
+    "description": "Critic defers the reduction"
+  },
+  {
+    "id": "stale",
+    "label": "Missing / stale metrics",
+    "description": "Marked uncertain"
+  },
+  {
+    "id": "spike",
+    "label": "Recent usage spike",
+    "description": "Reduction rejected"
+  },
+  {
+    "id": "no-change",
+    "label": "No safe reduction",
+    "description": "Capacity preserved"
+  }
+]

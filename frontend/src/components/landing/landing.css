@@ -1,0 +1,133 @@
+/*
+ * Landing page motion and decoration.
+ *
+ * Kept out of index.css on purpose: the dashboard's stylesheet is about the dashboard, and
+ * every rule here is scoped to the landing page's own markup. All of it is decorative, so
+ * the reduced-motion block at the bottom switches the whole thing off.
+ */
+
+@keyframes lp-float {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -18px, 0); }
+}
+
+@keyframes lp-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  33% { transform: translate3d(3%, -4%, 0) scale(1.08); }
+  66% { transform: translate3d(-3%, 3%, 0) scale(0.96); }
+}
+
+@keyframes lp-draw { to { stroke-dashoffset: 0; } }
+@keyframes lp-fade { to { opacity: 1; } }
+@keyframes lp-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+@keyframes lp-flow { to { background-position: -16px 0; } }
+@keyframes lp-sheen {
+  0% { transform: translateX(-140%) skewX(-18deg); }
+  100% { transform: translateX(340%) skewX(-18deg); }
+}
+@keyframes lp-blink {
+  0%, 45% { opacity: 1; }
+  50%, 95% { opacity: 0.25; }
+  100% { opacity: 1; }
+}
+
+/* Scroll reveal. Elements start shifted and transparent; the observer flips data-shown. */
+.lp-reveal {
+  opacity: 0;
+  transform: translate3d(0, 22px, 0);
+  transition:
+    opacity 0.75s cubic-bezier(0.22, 1, 0.36, 1),
+    transform 0.75s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.lp-reveal[data-shown='1'] {
+  opacity: 1;
+  transform: none;
+}
+
+/* A self-drawing line: pathLength="1" makes the dash lengths exact regardless of the path. */
+.lp-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: lp-draw 1.9s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.lp-fade {
+  opacity: 0;
+  animation: lp-fade 0.9s 0.45s ease forwards;
+}
+.lp-float { animation: lp-float 9s ease-in-out infinite; }
+.lp-float-slow { animation: lp-float 13s ease-in-out infinite; }
+.lp-drift { animation: lp-drift 22s ease-in-out infinite; }
+.lp-bob { animation: lp-bob 3.4s ease-in-out infinite; }
+.lp-blink { animation: lp-blink 2.6s ease-in-out infinite; }
+.lp-flow { animation: lp-flow 1.5s linear infinite; }
+
+/* The rail the pipeline stages hang from: a dashed rule that travels to the right, faded
+   out at both ends so it starts and stops softly. */
+.lp-rail {
+  background-image: repeating-linear-gradient(90deg, var(--lp-axis) 0 8px, transparent 8px 16px);
+  background-size: 16px 100%;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+}
+
+/* The grid behind the hero. The mask fades it out before it reaches the fold. */
+.lp-grid {
+  background-image:
+    linear-gradient(to right, oklch(0.55 0.03 250 / 0.09) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.55 0.03 250 / 0.09) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(75% 62% at 50% 8%, #000 30%, transparent 100%);
+  mask-image: radial-gradient(75% 62% at 50% 8%, #000 30%, transparent 100%);
+}
+.dark .lp-grid {
+  background-image:
+    linear-gradient(to right, oklch(0.85 0.03 250 / 0.09) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(0.85 0.03 250 / 0.09) 1px, transparent 1px);
+}
+
+/* A light that sweeps across the hero card, once, on load. */
+.lp-sheen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, oklch(0.85 0.06 185 / 0.14), transparent);
+  transform: translateX(-140%) skewX(-18deg);
+  animation: lp-sheen 3.4s 0.9s ease-in-out 1;
+  pointer-events: none;
+}
+
+/* The landing page's own chart palette. The two teal steps and the violet are the pair used
+   by the confidence bar; they were validated as a set against both surfaces. */
+.lp-viz {
+  --lp-teal: #00897b;
+  --lp-teal-soft: #009486;
+  --lp-violet: #6366f1;
+  --lp-amber: #eda100;
+  --lp-grid: oklch(0.208 0.042 265 / 0.1);
+  --lp-axis: oklch(0.554 0.046 257 / 0.55);
+}
+.dark .lp-viz {
+  --lp-teal: #149c90;
+  --lp-teal-soft: #149c90;
+  --lp-violet: #6366f1;
+  --lp-amber: #c98500;
+  --lp-grid: oklch(1 0 0 / 0.09);
+  --lp-axis: oklch(0.704 0.04 256 / 0.55);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .lp-float, .lp-float-slow, .lp-drift, .lp-bob, .lp-blink, .lp-flow,
+  .lp-sheen::after {
+    animation: none !important;
+  }
+  .lp-draw { stroke-dashoffset: 0; animation: none; }
+  .lp-fade { opacity: 1; animation: none; }
+}

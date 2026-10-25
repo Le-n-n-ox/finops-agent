@@ -1,0 +1,69 @@
+{
+  "version": "1.0",
+  "mode_defaults": "balanced",
+  "hard_rules": [
+    {
+      "id": "POL-001",
+      "name": "Protect critical workloads",
+      "effect": "block_resource_reduction",
+      "reason": "Critical workloads marked protected cannot receive reductions."
+    },
+    {
+      "id": "POL-002",
+      "name": "Business event freeze",
+      "effect": "defer",
+      "reason": "Defer affected workloads during active events with freeze_optimization=true."
+    },
+    {
+      "id": "POL-003",
+      "name": "Recent critical incident cooldown",
+      "effect": "defer",
+      "reason": "Require review after a matching critical incident within 14 days."
+    },
+    {
+      "id": "POL-004",
+      "name": "Maximum single-step reduction",
+      "effect": "block_if_violated",
+      "max_reduction_pct": 25,
+      "reason": "No single resource reduction may exceed 25%."
+    },
+    {
+      "id": "POL-005",
+      "name": "Preserve limits",
+      "effect": "block_if_violated",
+      "reason": "CPU and memory limits must remain unchanged."
+    },
+    {
+      "id": "POL-006",
+      "name": "Critical replica floor",
+      "effect": "block_if_violated",
+      "minimum_replicas": 2,
+      "reason": "Critical workloads must retain at least two replicas."
+    }
+  ],
+  "optimization_profiles": {
+    "conservative": {
+      "max_reduction_pct": 10,
+      "minimum_confidence": 0.85
+    },
+    "balanced": {
+      "max_reduction_pct": 20,
+      "minimum_confidence": 0.75
+    },
+    "cost_focused": {
+      "max_reduction_pct": 25,
+      "minimum_confidence": 0.7
+    }
+  },
+  "data_quality": {
+    "minimum_samples": 48,
+    "maximum_sample_age_hours": 6,
+    "minimum_coverage_pct": 90
+  },
+  "pricing": {
+    "currency": "USD",
+    "cpu_core_monthly_price": 18.0,
+    "memory_gib_monthly_price": 4.5,
+    "note": "Illustrative demo rates only."
+  }
+}

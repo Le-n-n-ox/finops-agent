@@ -1,10 +1,12 @@
 """Contract tests — these must always pass; they guard the Dev1/Dev2 interface."""
+import csv
 import json
 from pathlib import Path
 
 import yaml
 
-from app.models.schemas import AnalysisResponse, DecisionStatus, Policy, WorkloadSpec
+from app.models.schemas import AnalysisResponse, DecisionStatus, Policy
+from app.services.data_loader import load_inputs
 
 DATA = Path(__file__).resolve().parents[2] / "data"
 
@@ -18,9 +20,11 @@ def test_decision_statuses_are_the_agreed_five():
 
 
 def test_deployments_fixture_parses():
-    services = yaml.safe_load((DATA / "deployments.yaml").read_text())["services"]
-    specs = [WorkloadSpec(**s) for s in services]
-    assert len(specs) == 5 and all(s.memory_request_mib > 0 for s in specs)
+    deployments = [doc for doc in yaml.safe_load_all((DATA / "deployments.yaml").read_text())
+                   if isinstance(doc, dict) and doc.get("kind") == "Deployment"]
+    bundle = load_inputs(DATA)
+    assert len(deployments) == len(bundle.services) == 12
+    assert all(spec.memory_request_mib > 0 for spec in bundle.services)
 
 
 def test_policy_fixture_parses():
@@ -28,10 +32,11 @@ def test_policy_fixture_parses():
 
 
 def test_usage_fixture_has_expected_coverage():
-    lines = (DATA / "usage_history.csv").read_text().strip().splitlines()[1:]
+    with (DATA / "usage_history.csv").open(encoding="utf-8", newline="") as file:
+        rows = list(csv.DictReader(file))
     counts: dict[str, int] = {}
-    for ln in lines:
-        svc = ln.split(",")[1]
-        counts[svc] = counts.get(svc, 0) + 1
-    assert counts["email-worker"] == 10  # insufficient-data scenario
-    assert all(v == 72 for k, v in counts.items() if k != "email-worker")
+    for row in rows:
+        counts[row["workload"]] = counts.get(row["workload"], 0) + 1
+    assert len(counts) == 12
+    assert all(v == 720 for v in counts.values())
+    assert sum(row["data_quality_flag"] == "imputed_mock_cpu" for row in rows) == 16

@@ -1,37 +1,345 @@
-# Normalized resource snapshot (CPU = millicores, memory = MiB). Not raw K8s manifests.
-services:
-  - name: payment-api
-    namespace: payments
-    replicas: 3
-    cpu_request_millicores: 1000
-    cpu_limit_millicores: 2000
-    memory_request_mib: 4096
-    memory_limit_mib: 6144
-  - name: checkout-service
-    namespace: commerce
-    replicas: 3
-    cpu_request_millicores: 1000
-    cpu_limit_millicores: 2000
-    memory_request_mib: 4096
-    memory_limit_mib: 6144
-  - name: email-worker
-    namespace: jobs
-    replicas: 2
-    cpu_request_millicores: 500
-    cpu_limit_millicores: 1500
-    memory_request_mib: 2048
-    memory_limit_mib: 3072
-  - name: session-store
-    namespace: core
-    replicas: 2
-    cpu_request_millicores: 500
-    cpu_limit_millicores: 1000
-    memory_request_mib: 1024
-    memory_limit_mib: 2048
-  - name: recommendation-api
-    namespace: ml
-    replicas: 2
-    cpu_request_millicores: 1500
-    cpu_limit_millicores: 3000
-    memory_request_mib: 8192
-    memory_limit_mib: 12288
+# Synthetic fixture only; image names use example.invalid and are not deployable.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-api
+  namespace: payments
+  labels:
+    finops.example.com/criticality: critical
+    finops.example.com/protected: "true"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: payment-api
+  template:
+    metadata:
+      labels:
+        app: payment-api
+    spec:
+      containers:
+        - name: payment-api
+          image: example.invalid/payment-api:1.0.0
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "4096Mi"
+            limits:
+              cpu: "2000m"
+              memory: "6144Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-service
+  namespace: commerce
+  labels:
+    finops.example.com/criticality: critical
+    finops.example.com/protected: "true"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: checkout-service
+  template:
+    metadata:
+      labels:
+        app: checkout-service
+    spec:
+      containers:
+        - name: checkout-service
+          image: example.invalid/checkout-service:1.0.0
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "4096Mi"
+            limits:
+              cpu: "2000m"
+              memory: "6144Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: email-worker
+  namespace: jobs
+  labels:
+    finops.example.com/criticality: low
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: email-worker
+  template:
+    metadata:
+      labels:
+        app: email-worker
+    spec:
+      containers:
+        - name: email-worker
+          image: example.invalid/email-worker:1.0.0
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2048Mi"
+            limits:
+              cpu: "1500m"
+              memory: "3072Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: session-store
+  namespace: core
+  labels:
+    finops.example.com/criticality: critical
+    finops.example.com/protected: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: session-store
+  template:
+    metadata:
+      labels:
+        app: session-store
+    spec:
+      containers:
+        - name: session-store
+          image: example.invalid/session-store:1.0.0
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1024Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2048Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recommendation-api
+  namespace: ml
+  labels:
+    finops.example.com/criticality: medium
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: recommendation-api
+  template:
+    metadata:
+      labels:
+        app: recommendation-api
+    spec:
+      containers:
+        - name: recommendation-api
+          image: example.invalid/recommendation-api:1.0.0
+          resources:
+            requests:
+              cpu: "1500m"
+              memory: "8192Mi"
+            limits:
+              cpu: "3000m"
+              memory: "12288Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-resizer
+  namespace: media
+  labels:
+    finops.example.com/criticality: low
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: image-resizer
+  template:
+    metadata:
+      labels:
+        app: image-resizer
+    spec:
+      containers:
+        - name: image-resizer
+          image: example.invalid/image-resizer:1.0.0
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "4096Mi"
+            limits:
+              cpu: "2000m"
+              memory: "6144Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-api
+  namespace: commerce
+  labels:
+    finops.example.com/criticality: medium
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: catalog-api
+  template:
+    metadata:
+      labels:
+        app: catalog-api
+    spec:
+      containers:
+        - name: catalog-api
+          image: example.invalid/catalog-api:1.0.0
+          resources:
+            requests:
+              cpu: "750m"
+              memory: "2048Mi"
+            limits:
+              cpu: "1500m"
+              memory: "4096Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: analytics-batch
+  namespace: analytics
+  labels:
+    finops.example.com/criticality: low
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: analytics-batch
+  template:
+    metadata:
+      labels:
+        app: analytics-batch
+    spec:
+      containers:
+        - name: analytics-batch
+          image: example.invalid/analytics-batch:1.0.0
+          resources:
+            requests:
+              cpu: "2000m"
+              memory: "8192Mi"
+            limits:
+              cpu: "4000m"
+              memory: "12288Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: identity
+  labels:
+    finops.example.com/criticality: critical
+    finops.example.com/protected: "true"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: auth-service
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      containers:
+        - name: auth-service
+          image: example.invalid/auth-service:1.0.0
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1024Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2048Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-indexer
+  namespace: search
+  labels:
+    finops.example.com/criticality: medium
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: search-indexer
+  template:
+    metadata:
+      labels:
+        app: search-indexer
+    spec:
+      containers:
+        - name: search-indexer
+          image: example.invalid/search-indexer:1.0.0
+          resources:
+            requests:
+              cpu: "1500m"
+              memory: "6144Mi"
+            limits:
+              cpu: "3000m"
+              memory: "10240Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docs-renderer
+  namespace: platform-tools
+  labels:
+    finops.example.com/criticality: low
+    finops.example.com/protected: "false"
+    finops.example.com/autoscaler-enabled: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: docs-renderer
+  template:
+    metadata:
+      labels:
+        app: docs-renderer
+    spec:
+      containers:
+        - name: docs-renderer
+          image: example.invalid/docs-renderer:1.0.0
+          resources:
+            requests:
+              cpu: "800m"
+              memory: "3072Mi"
+            limits:
+              cpu: "1600m"
+              memory: "4096Mi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: queue-cleaner
+  namespace: platform-tools
+  labels:
+    finops.example.com/criticality: low
+    finops.example.com/protected: "false"
+    finops.example.com/autoscaler-enabled: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: queue-cleaner
+  template:
+    metadata:
+      labels:
+        app: queue-cleaner
+    spec:
+      containers:
+        - name: queue-cleaner
+          image: example.invalid/queue-cleaner:1.0.0
+          resources:
+            requests:
+              cpu: "400m"
+              memory: "2048Mi"
+            limits:
+              cpu: "800m"
+              memory: "3072Mi"

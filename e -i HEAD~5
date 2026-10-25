@@ -1,0 +1,8 @@
+[33mcommit 2f601521e13366393f16fe68fc498dc26cbf883f[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mfeature/lennox[m[33m, [m[1;31morigin/main[m[33m, [m[1;31morigin/feature/steve[m[33m, [m[1;31morigin/feature/lennox[m[33m, [m[1;31morigin/develop[m[33m, [m[1;31morigin/HEAD[m[33m, [m[1;32mmain[m[33m, [m[1;32mfeature/steve[m[33m, [m[1;32mdevelop[m[33m)[m
+Author: Developer 1 <lexwanys@gmail.com>
+Date:   Mon Oct 19 18:06:38 2026 +0300
+
+    chore: scaffold repo structure, shared contract, fixtures and integration seams
+    
+    Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01TgtfL13uNkkpWCkbQnyNHx

@@ -1,0 +1,591 @@
+{
+  "analysis_id": "ANL-SAMPLE-0001-no-change",
+  "generated_at": "2026-10-13T09:00:00+03:00",
+  "mode": "agent",
+  "summary": {
+    "workloads_evaluated": 1,
+    "approved": 0,
+    "deferred": 0,
+    "rejected": 0,
+    "needs_review": 0,
+    "no_change": 1,
+    "estimated_monthly_savings_usd": 0
+  },
+  "results": [
+    {
+      "workload_id": "session-store",
+      "namespace": "core",
+      "decision": "no_change",
+      "risk_level": "low",
+      "reason": "No safe reduction identified.",
+      "confidence_score": 88,
+      "confidence_basis": "100.0% of reported numbers traced to a tool result; 72/24 samples; fresh metrics.",
+      "evidence_trail": [
+        "analyze_rightsizing(workload_id=session-store) -> no_change",
+        "validate_policy(proposal_data={}) -> no_change"
+      ],
+      "objections": [],
+      "cycles": [
+        {
+          "role": "proposer",
+          "summary": "Pulled 72 hourly samples for session-store. Peak usage sits within 10% of the current request, so there is no meaningful headroom to give back.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_workload_metrics",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "72 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "analyze_rightsizing",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "no_change",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": null,
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "critic",
+          "summary": "Looked for a way to justify a change anyway and did not find one. The proposed reduction would fall below observed p99, which is exactly the case the critic refuses to approve.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "search_logs",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            },
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "get_incident_history",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "0 record(s)",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "accept",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        },
+        {
+          "role": "judge",
+          "summary": "No change to rule on. The deterministic critic returned no_change, so the current allocation stays.",
+          "steps": [
+            {
+              "timestamp": "2026-10-13T09:00:00+03:00",
+              "tool": "validate_policy",
+              "params": {
+                "workload_id": "session-store"
+              },
+              "result": "no_change",
+              "thought": null
+            }
+          ],
+          "objections": [],
+          "verdict": "no_change",
+          "started_at": "2026-10-13T09:00:00+03:00",
+          "completed_at": "2026-10-13T09:00:00+03:00"
+        }
+      ],
+      "checks": [
+        {
+          "name": "benefit",
+          "code": "BELOW_THRESHOLD",
+          "status": "triggered",
+          "message": "Reduction < 15%",
+          "evidence": {}
+        }
+      ],
+      "proposal": {
+        "proposal_id": "PRP-0004",
+        "workload_id": "session-store",
+        "namespace": "core",
+        "status": "no_change",
+        "current": {
+          "cpu_request_millicores": 500,
+          "cpu_limit_millicores": 1000,
+          "memory_request_mib": 1024,
+          "memory_limit_mib": 2048
+        },
+        "proposed": null,
+        "metrics": {
+          "sample_count": 72,
+          "span_hours": 71,
+          "cpu_p95": 470,
+          "cpu_p99": 480,
+          "memory_p95": 910,
+          "memory_p99": 920
+        },
+        "reasons": [
+          "Peak usage near current request"
+        ],
+        "warnings": [],
+        "estimated_monthly_saving_usd": 0,
+        "created_at": "2026-10-13T09:00:00+03:00",
+        "suppressed_saving_usd": 0,
+        "suppressed_proposal": null
+      },
+      "monthly_savings_estimate_usd": 0,
+      "yaml_patch": null,
+      "usage_series": [
+        {
+          "t": "2026-10-10T07:00:00.000Z",
+          "cpu": 404,
+          "mem": 905
+        },
+        {
+          "t": "2026-10-10T08:00:00.000Z",
+          "cpu": 425,
+          "mem": 909
+        },
+        {
+          "t": "2026-10-10T09:00:00.000Z",
+          "cpu": 441,
+          "mem": 913
+        },
+        {
+          "t": "2026-10-10T10:00:00.000Z",
+          "cpu": 459,
+          "mem": 916
+        },
+        {
+          "t": "2026-10-10T11:00:00.000Z",
+          "cpu": 465,
+          "mem": 917
+        },
+        {
+          "t": "2026-10-10T12:00:00.000Z",
+          "cpu": 475,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-10T13:00:00.000Z",
+          "cpu": 474,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-10T14:00:00.000Z",
+          "cpu": 469,
+          "mem": 918
+        },
+        {
+          "t": "2026-10-10T15:00:00.000Z",
+          "cpu": 466,
+          "mem": 917
+        },
+        {
+          "t": "2026-10-10T16:00:00.000Z",
+          "cpu": 457,
+          "mem": 916
+        },
+        {
+          "t": "2026-10-10T17:00:00.000Z",
+          "cpu": 436,
+          "mem": 912
+        },
+        {
+          "t": "2026-10-10T18:00:00.000Z",
+          "cpu": 425,
+          "mem": 909
+        },
+        {
+          "t": "2026-10-10T19:00:00.000Z",
+          "cpu": 402,
+          "mem": 905
+        },
+        {
+          "t": "2026-10-10T20:00:00.000Z",
+          "cpu": 382,
+          "mem": 901
+        },
+        {
+          "t": "2026-10-10T21:00:00.000Z",
+          "cpu": 363,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-10T22:00:00.000Z",
+          "cpu": 351,
+          "mem": 895
+        },
+        {
+          "t": "2026-10-10T23:00:00.000Z",
+          "cpu": 337,
+          "mem": 893
+        },
+        {
+          "t": "2026-10-11T00:00:00.000Z",
+          "cpu": 333,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-11T01:00:00.000Z",
+          "cpu": 336,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-11T02:00:00.000Z",
+          "cpu": 335,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-11T03:00:00.000Z",
+          "cpu": 337,
+          "mem": 893
+        },
+        {
+          "t": "2026-10-11T04:00:00.000Z",
+          "cpu": 349,
+          "mem": 895
+        },
+        {
+          "t": "2026-10-11T05:00:00.000Z",
+          "cpu": 363,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-11T06:00:00.000Z",
+          "cpu": 382,
+          "mem": 901
+        },
+        {
+          "t": "2026-10-11T07:00:00.000Z",
+          "cpu": 400,
+          "mem": 905
+        },
+        {
+          "t": "2026-10-11T08:00:00.000Z",
+          "cpu": 423,
+          "mem": 909
+        },
+        {
+          "t": "2026-10-11T09:00:00.000Z",
+          "cpu": 444,
+          "mem": 913
+        },
+        {
+          "t": "2026-10-11T10:00:00.000Z",
+          "cpu": 458,
+          "mem": 916
+        },
+        {
+          "t": "2026-10-11T11:00:00.000Z",
+          "cpu": 461,
+          "mem": 916
+        },
+        {
+          "t": "2026-10-11T12:00:00.000Z",
+          "cpu": 469,
+          "mem": 918
+        },
+        {
+          "t": "2026-10-11T13:00:00.000Z",
+          "cpu": 476,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-11T14:00:00.000Z",
+          "cpu": 473,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-11T15:00:00.000Z",
+          "cpu": 461,
+          "mem": 916
+        },
+        {
+          "t": "2026-10-11T16:00:00.000Z",
+          "cpu": 451,
+          "mem": 914
+        },
+        {
+          "t": "2026-10-11T17:00:00.000Z",
+          "cpu": 438,
+          "mem": 912
+        },
+        {
+          "t": "2026-10-11T18:00:00.000Z",
+          "cpu": 426,
+          "mem": 910
+        },
+        {
+          "t": "2026-10-11T19:00:00.000Z",
+          "cpu": 399,
+          "mem": 904
+        },
+        {
+          "t": "2026-10-11T20:00:00.000Z",
+          "cpu": 383,
+          "mem": 901
+        },
+        {
+          "t": "2026-10-11T21:00:00.000Z",
+          "cpu": 366,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-11T22:00:00.000Z",
+          "cpu": 351,
+          "mem": 895
+        },
+        {
+          "t": "2026-10-11T23:00:00.000Z",
+          "cpu": 336,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-12T00:00:00.000Z",
+          "cpu": 331,
+          "mem": 891
+        },
+        {
+          "t": "2026-10-12T01:00:00.000Z",
+          "cpu": 329,
+          "mem": 891
+        },
+        {
+          "t": "2026-10-12T02:00:00.000Z",
+          "cpu": 335,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-12T03:00:00.000Z",
+          "cpu": 339,
+          "mem": 893
+        },
+        {
+          "t": "2026-10-12T04:00:00.000Z",
+          "cpu": 354,
+          "mem": 896
+        },
+        {
+          "t": "2026-10-12T05:00:00.000Z",
+          "cpu": 363,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-12T06:00:00.000Z",
+          "cpu": 387,
+          "mem": 902
+        },
+        {
+          "t": "2026-10-12T07:00:00.000Z",
+          "cpu": 407,
+          "mem": 906
+        },
+        {
+          "t": "2026-10-12T08:00:00.000Z",
+          "cpu": 425,
+          "mem": 909
+        },
+        {
+          "t": "2026-10-12T09:00:00.000Z",
+          "cpu": 441,
+          "mem": 912
+        },
+        {
+          "t": "2026-10-12T10:00:00.000Z",
+          "cpu": 454,
+          "mem": 915
+        },
+        {
+          "t": "2026-10-12T11:00:00.000Z",
+          "cpu": 469,
+          "mem": 918
+        },
+        {
+          "t": "2026-10-12T12:00:00.000Z",
+          "cpu": 475,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-12T13:00:00.000Z",
+          "cpu": 472,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-12T14:00:00.000Z",
+          "cpu": 474,
+          "mem": 919
+        },
+        {
+          "t": "2026-10-12T15:00:00.000Z",
+          "cpu": 465,
+          "mem": 917
+        },
+        {
+          "t": "2026-10-12T16:00:00.000Z",
+          "cpu": 450,
+          "mem": 914
+        },
+        {
+          "t": "2026-10-12T17:00:00.000Z",
+          "cpu": 441,
+          "mem": 913
+        },
+        {
+          "t": "2026-10-12T18:00:00.000Z",
+          "cpu": 421,
+          "mem": 909
+        },
+        {
+          "t": "2026-10-12T19:00:00.000Z",
+          "cpu": 400,
+          "mem": 905
+        },
+        {
+          "t": "2026-10-12T20:00:00.000Z",
+          "cpu": 380,
+          "mem": 901
+        },
+        {
+          "t": "2026-10-12T21:00:00.000Z",
+          "cpu": 366,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-12T22:00:00.000Z",
+          "cpu": 355,
+          "mem": 896
+        },
+        {
+          "t": "2026-10-12T23:00:00.000Z",
+          "cpu": 338,
+          "mem": 893
+        },
+        {
+          "t": "2026-10-13T00:00:00.000Z",
+          "cpu": 334,
+          "mem": 892
+        },
+        {
+          "t": "2026-10-13T01:00:00.000Z",
+          "cpu": 329,
+          "mem": 891
+        },
+        {
+          "t": "2026-10-13T02:00:00.000Z",
+          "cpu": 331,
+          "mem": 891
+        },
+        {
+          "t": "2026-10-13T03:00:00.000Z",
+          "cpu": 343,
+          "mem": 894
+        },
+        {
+          "t": "2026-10-13T04:00:00.000Z",
+          "cpu": 350,
+          "mem": 895
+        },
+        {
+          "t": "2026-10-13T05:00:00.000Z",
+          "cpu": 364,
+          "mem": 898
+        },
+        {
+          "t": "2026-10-13T06:00:00.000Z",
+          "cpu": 385,
+          "mem": 902
+        }
+      ],
+      "events": []
+    }
+  ],
+  "warnings": [
+    "Sample/illustrative data. Savings are estimates, not guaranteed bill reductions."
+  ],
+  "policy_version": "demo-1",
+  "rule_version": "rules-1",
+  "input_fingerprint": "sha256:sample0001fingerprint00000000000000000000000000000000000000000000",
+  "data_health": {
+    "generated_at": "2026-10-13T09:00:00+03:00",
+    "source": "local",
+    "workloads_checked": 4,
+    "error_count": 0,
+    "warning_count": 1,
+    "workloads": [
+      {
+        "workload_id": "payment-api",
+        "namespace": "payments",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      },
+      {
+        "workload_id": "checkout-service",
+        "namespace": "commerce",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      },
+      {
+        "workload_id": "email-worker",
+        "namespace": "jobs",
+        "sample_count": 10,
+        "required_samples": 24,
+        "span_hours": 9,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": true,
+        "stale_metrics": false,
+        "status": "warning"
+      },
+      {
+        "workload_id": "session-store",
+        "namespace": "core",
+        "sample_count": 72,
+        "required_samples": 24,
+        "span_hours": 71,
+        "required_span_hours": 24,
+        "latest_metric_age_hours": 1,
+        "max_metric_age_hours": 72,
+        "missing_metrics": false,
+        "sparse_metrics": false,
+        "stale_metrics": false,
+        "status": "healthy"
+      }
+    ],
+    "issues": [
+      {
+        "severity": "warning",
+        "code": "SPARSE_METRICS",
+        "source": "usage_history",
+        "workload_id": "email-worker",
+        "message": "10 samples over 9.0 hours; need 24 samples over 24.0 hours."
+      }
+    ]
+  },
+  "input_issues": []
+}
